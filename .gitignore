@@ -1,0 +1,8 @@
+node_modules/
+playwright-report/
+test-results/
+artifacts/traces/*.zip
+artifacts/screenshots/
+artifacts/diagnostics/
+.DS_Store
+safari/build/

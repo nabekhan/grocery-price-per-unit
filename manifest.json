@@ -1,0 +1,82 @@
+{
+  "manifest_version": 3,
+  "name": "Grocery Price Per Unit",
+  "version": "2.0.5",
+  "description": "Shows and sorts comparable unit prices on Walmart Canada, Loblaw banners, and Save-On-Foods.",
+  "icons": {
+    "16": "icon16.png",
+    "48": "icon48.png",
+    "128": "icon128.png"
+  },
+  "permissions": ["storage"],
+  "action": {
+    "default_title": "Grocery Price Per Unit settings",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icon16.png",
+      "48": "icon48.png",
+      "128": "icon128.png"
+    }
+  },
+  "host_permissions": [
+    "https://www.realcanadiansuperstore.ca/*",
+    "https://www.nofrills.ca/*",
+    "https://www.walmart.ca/*",
+    "https://www.saveonfoods.com/*"
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["loblaw-api-capture-main.js"],
+      "matches": [
+        "https://www.realcanadiansuperstore.ca/*",
+        "https://www.nofrills.ca/*"
+      ]
+    },
+    {
+      "resources": ["walmart-api-capture-main.js"],
+      "matches": ["https://www.walmart.ca/*"]
+    },
+    {
+      "resources": ["saveon-api-capture-main.js"],
+      "matches": ["https://www.saveonfoods.com/*"]
+    }
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.realcanadiansuperstore.ca/*",
+        "https://www.nofrills.ca/*"
+      ],
+      "js": ["loblaw-api-capture-main.js"],
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "https://www.realcanadiansuperstore.ca/*",
+        "https://www.nofrills.ca/*"
+      ],
+      "js": ["loblaw-content.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://www.walmart.ca/*"],
+      "js": ["walmart-api-capture-main.js"],
+      "run_at": "document_start"
+    },
+    {
+      "matches": ["https://www.walmart.ca/*"],
+      "js": ["walmart-content.js", "walmart-sort.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://www.saveonfoods.com/*"],
+      "js": ["saveon-api-capture-main.js"],
+      "run_at": "document_start"
+    },
+    {
+      "matches": ["https://www.saveonfoods.com/*"],
+      "js": ["saveon-content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
