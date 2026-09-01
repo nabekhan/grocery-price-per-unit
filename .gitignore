@@ -5,4 +5,3 @@ artifacts/traces/*.zip
 artifacts/screenshots/
 artifacts/diagnostics/
 .DS_Store
-safari/build/

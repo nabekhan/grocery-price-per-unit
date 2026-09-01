@@ -2,6 +2,7 @@ import { defineConfig, devices } from '@playwright/test';
 
 export default defineConfig({
   testDir: './tests/e2e',
+  globalSetup: './tests/e2e/global-setup.js',
   timeout: 60_000,
   expect: { timeout: 10_000 },
   outputDir: 'artifacts/traces',

@@ -1,21 +1,31 @@
 {
   "name": "grocery-price-per-unit",
-  "version": "2.0.5",
+  "version": "2.0.8",
+  "description": "A documented Safari userscript for comparable grocery unit prices across four Canadian storefronts.",
   "private": true,
   "license": "GPL-3.0-only",
   "type": "module",
+  "userscript": {
+    "name": "Grocery Price Per Unit",
+    "description": "Shows and sorts comparable unit prices on Walmart Canada, Real Canadian Superstore, No Frills, and Save-On-Foods."
+  },
   "scripts": {
-    "build": "node scripts/build.mjs",
-    "safari:generate": "npm run build && ./scripts/generate-safari.sh",
-    "safari:build": "./scripts/build-safari.sh",
-    "safari:install": "./scripts/install-safari.sh",
+    "build": "node scripts/build-userscript.mjs",
+    "userscript:build": "node scripts/build-userscript.mjs",
+    "userscript:candidate:verify": "npm run build && node scripts/verify-release.mjs",
+    "userscript:verify": "npm run build && node scripts/verify-release.mjs --require-recorded",
+    "userscript:candidate:audit": "npm run check && npm run visual:audit && npm run userscript:candidate:verify",
+    "userscript:install": "./scripts/install-userscript.sh",
     "lint": "eslint .",
     "test": "vitest run tests/unit",
-    "test:e2e": "playwright test tests/e2e/fixture.spec.js tests/e2e/walmart-fixture.spec.js tests/e2e/retailer-fixture.spec.js --project=webkit",
+    "test:e2e": "playwright test tests/e2e/fixture.spec.js tests/e2e/retailer-fixture.spec.js tests/e2e/userscript-fixture.spec.js --project=webkit",
+    "visual:audit": "node scripts/run-visual-audit.mjs",
     "test:live": "LIVE_SITE=1 playwright test tests/e2e/live.spec.js --project=webkit --workers=1",
     "test:live:matrix": "LIVE_SITE=1 playwright test tests/e2e/live-matrix.spec.js --project=webkit --workers=1",
     "test:live:hardware": "LIVE_SITE=1 playwright test tests/e2e/live-hardware.spec.js --project=webkit --workers=1",
-    "check": "npm run build && npm run lint && npm test && npm run test:e2e"
+    "test:live:inspect": "LIVE_SITE=1 node scripts/inspect-live.mjs",
+    "check": "npm run lint && npm test && npm run test:e2e",
+    "candidate:audit": "npm run userscript:candidate:audit"
   },
   "devDependencies": {
     "@eslint/js": "^9.32.0",

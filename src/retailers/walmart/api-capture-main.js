@@ -1,34 +1,21 @@
-// Safari does not support Chromium's content_scripts[].world manifest key.
-// The isolated-world copy injects this same bundled file into the page world;
-// the page-world copy has no extension runtime and skips this bootstrap.
-(function injectPageWorldCapture(global) {
-    const runtime = global.browser?.runtime || global.chrome?.runtime;
-    const root = global.document?.documentElement;
-    if (!runtime?.getURL || !root || root.dataset.wppuApiCaptureInjected) return;
-    root.dataset.wppuApiCaptureInjected = 'true';
-    const script = global.document.createElement('script');
-    script.src = runtime.getURL('walmart-api-capture-main.js');
-    script.async = false;
-    script.addEventListener('load', () => script.remove(), { once: true });
-    script.addEventListener('error', () => {
-        delete root.dataset.wppuApiCaptureInjected;
-        script.remove();
-    }, { once: true });
-    root.prepend(script);
-})(globalThis);
-
-// Runs in Walmart's main page world at document_start. It observes Walmart's
-// own search requests; it never makes a request or reads request credentials.
+/*!
+ * Walmart page-world search observer. Installed at document-start, it watches
+ * Walmart's bounded GraphQL search responses and bootstrap cache without
+ * initiating requests or reading credentials. Sanitized records are scoped to
+ * the current route and published only after response/sequence checks pass.
+ */
 (function initializeApiCapture(global) {
     'use strict';
 
     const SOURCE = 'walmart-price-per-unit';
-    const VERSION = 1;
+    const VERSION = 2;
     const PRODUCTS_TYPE = 'api-products';
     const REQUEST_TYPE = 'api-products-request';
     const CACHE_LIMIT = 500;
     const MAX_WALK_NODES = 20000;
     const MAX_EXTRACTED_ITEMS = 2000;
+    const MAX_CONTAINER_ENTRIES = 500;
+    const MAX_PRELOADED_TEXT_LENGTH = 10000000;
     const SEARCH_PATH = /^\/orchestra\/snb\/graphql\/search(?:\/[^/]+\/search)?\/?$/i;
     const INSTALL_KEY = typeof Symbol === 'function'
         ? Symbol.for('walmart-price-per-unit.api-capture.v1')
@@ -67,12 +54,12 @@
     }
 
     function cleanNumber(value) {
-        if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+        if (typeof value === 'number') return Number.isFinite(value) && value > 0 && value <= 1_000_000 ? value : null;
         if (typeof value !== 'string') return null;
         const normalized = value.trim().replace(/,/g, '');
         if (!/^-?(?:\d+(?:\.\d+)?|\.\d+)$/.test(normalized)) return null;
         const number = Number(normalized);
-        return Number.isFinite(number) ? number : null;
+        return Number.isFinite(number) && number > 0 && number <= 1_000_000 ? number : null;
     }
 
     function cleanDisplayedPrice(value) {
@@ -81,17 +68,21 @@
         const text = cleanText(value, 64);
         if (text === null) return null;
         const cents = text.match(/^(\d+(?:\.\d+)?)\s*¢$/);
-        if (cents) return Number(cents[1]) / 100;
+        if (cents) {
+            const price = Number(cents[1]) / 100;
+            return price > 0 && price <= 1_000_000 ? price : null;
+        }
         const dollars = text.match(/^\$\s*(\d+(?:,\d{3})*)(?:\.(\d{2}))?$/);
         if (!dollars) return null;
-        return Number(`${dollars[1].replace(/,/g, '')}.${dollars[2] || '00'}`);
+        const price = Number(`${dollars[1].replace(/,/g, '')}.${dollars[2] || '00'}`);
+        return price > 0 && price <= 1_000_000 ? price : null;
     }
 
     function cleanUnitPrice(value) {
         if (typeof value === 'string') return cleanText(value, 128);
         if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
 
-        const price = cleanScalar(value.price);
+        const price = cleanNumber(value.price);
         const priceString = cleanText(value.priceString, 128);
         if (price === null && priceString === null) return null;
 
@@ -150,6 +141,64 @@
         };
     }
 
+    function normalizedStoreIdentity(value) {
+        if (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0) return String(value);
+        return cleanText(value, 80)?.toLowerCase() || null;
+    }
+
+    function storeIdentityFromPage(value, expectedOrigin) {
+        const pagePath = safePagePath(value, expectedOrigin);
+        if (pagePath === null) return null;
+        const url = new URL(pagePath, expectedOrigin);
+        for (const key of ['store', 'storeId', 'store_id']) {
+            const identity = normalizedStoreIdentity(url.searchParams.get(key));
+            if (identity) return identity;
+        }
+        return null;
+    }
+
+    function storeIdentityFromVariables(variables) {
+        if (!variables || typeof variables !== 'object' || Array.isArray(variables)) return { value: null, ambiguous: false };
+        const candidates = [
+            variables.store,
+            variables.storeId,
+            variables.input?.storeId,
+            variables.searchArgs?.storeId,
+            variables.storeContext?.storeId
+        ];
+        if (Array.isArray(variables.storeIds) && variables.storeIds.length === 1) candidates.push(variables.storeIds[0]);
+        const values = [...new Set(candidates.map(normalizedStoreIdentity).filter(Boolean))];
+        return { value: values.length === 1 ? values[0] : null, ambiguous: values.length > 1 };
+    }
+
+    function canonicalRequestValue(value, depth = 0, budget = { entries: 0 }) {
+        if (budget.entries >= 300 || depth > 7) return null;
+        if (value === null || typeof value === 'boolean') return value;
+        if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+        if (typeof value === 'string') return value.slice(0, 256);
+        if (Array.isArray(value)) {
+            budget.entries += 1;
+            return value.slice(0, 100).map(item => canonicalRequestValue(item, depth + 1, budget));
+        }
+        if (!value || typeof value !== 'object') return null;
+        const result = {};
+        for (const key of Object.keys(value).sort().slice(0, 100)) {
+            budget.entries += 1;
+            if (budget.entries > 300) break;
+            result[key.slice(0, 128)] = canonicalRequestValue(value[key], depth + 1, budget);
+        }
+        return result;
+    }
+
+    function variablesFingerprint(variables) {
+        if (!variables || typeof variables !== 'object' || Array.isArray(variables)) return '';
+        const filtered = { ...variables };
+        delete filtered.query;
+        delete filtered.page;
+        if (Object.keys(filtered).length === 0) return '';
+        return JSON.stringify(canonicalRequestValue(filtered)).slice(0, 8192);
+    }
+
     function requestContext(requestUrl, pageUrlAtRequest, expectedOrigin) {
         let variables = null;
         try {
@@ -160,9 +209,14 @@
         }
 
         const pageLocation = queryAndPageFromUrl(pageUrlAtRequest, expectedOrigin);
+        const variableStore = storeIdentityFromVariables(variables);
+        const pageStore = storeIdentityFromPage(pageUrlAtRequest, expectedOrigin);
+        if (variableStore.ambiguous || (variableStore.value && pageStore && variableStore.value !== pageStore)) return null;
         return {
             query: normalizeQuery(variables && variables.query) ?? pageLocation.query,
             page: normalizePage(variables && variables.page) ?? pageLocation.page,
+            storeId: variableStore.value || pageStore,
+            variablesFingerprint: variablesFingerprint(variables),
             pageUrlAtRequest: pageLocation.pagePath,
             pageUrlAtCapture: null
         };
@@ -176,6 +230,9 @@
         return {
             query: pageLocation.query ?? normalizeQuery(variables && variables.query),
             page: pageLocation.page ?? normalizePage(variables && variables.page),
+            storeId: storeIdentityFromPage(target.location && target.location.href, expectedOrigin)
+                || storeIdentityFromVariables(variables).value,
+            variablesFingerprint: variablesFingerprint(variables),
             pageUrlAtRequest: pageLocation.pagePath,
             pageUrlAtCapture: pageLocation.pagePath
         };
@@ -183,18 +240,38 @@
 
     function sanitizeContext(context, expectedOrigin) {
         if (!context || typeof context !== 'object') return null;
-        return {
+        const sanitized = {
             query: normalizeQuery(context.query),
             page: normalizePage(context.page),
+            storeId: normalizedStoreIdentity(context.storeId),
+            variablesFingerprint: cleanText(context.variablesFingerprint, 8192) || '',
             pageUrlAtRequest: safePagePath(context.pageUrlAtRequest, expectedOrigin),
             pageUrlAtCapture: safePagePath(context.pageUrlAtCapture, expectedOrigin)
         };
+        sanitized.pageIdentity = pageIdentity(sanitized.pageUrlAtRequest || sanitized.pageUrlAtCapture, expectedOrigin);
+        return sanitized;
+    }
+
+    function pageIdentity(value, expectedOrigin) {
+        const pagePath = safePagePath(value, expectedOrigin);
+        if (pagePath === null) return null;
+        const url = new URL(pagePath, expectedOrigin);
+        const parameters = [...url.searchParams.entries()]
+            .filter(([key]) => !/^(?:q|page)$/i.test(key))
+            .sort(([leftKey, leftValue], [rightKey, rightValue]) =>
+                leftKey.localeCompare(rightKey) || leftValue.localeCompare(rightValue));
+        const suffix = parameters.map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`).join('&');
+        return `${url.pathname.replace(/\/$/, '')}${suffix ? `?${suffix}` : ''}`;
     }
 
     function contextScope(context) {
-        if (context && context.query !== null) return `query:${context.query}`;
-        if (context && context.pageUrlAtRequest !== null) return `page:${context.pageUrlAtRequest}`;
+        if (context && context.query !== null) return `query:${context.query}|page:${context.pageIdentity || ''}|store:${context.storeId || ''}|filter:${context.variablesFingerprint || ''}`;
+        if (context && context.pageIdentity !== null) return `page:${context.pageIdentity}|store:${context.storeId || ''}|filter:${context.variablesFingerprint || ''}`;
         return 'unknown';
+    }
+
+    function isLaterPage(context) {
+        return Number.isSafeInteger(context?.page) && context.page > 1;
     }
 
     function sanitizeProduct(item) {
@@ -242,6 +319,13 @@
         const seen = new WeakSet();
         let inspected = 0;
         let pendingIndex = 0;
+        let enqueued = 1;
+
+        function enqueue(value) {
+            if (!value || typeof value !== 'object' || enqueued >= MAX_WALK_NODES) return;
+            pending.push(value);
+            enqueued += 1;
+        }
 
         while (pendingIndex < pending.length && inspected < MAX_WALK_NODES && products.length < MAX_EXTRACTED_ITEMS) {
             const value = pending[pendingIndex];
@@ -251,12 +335,17 @@
             inspected += 1;
 
             if (Array.isArray(value)) {
-                for (const child of value) pending.push(child);
+                const limit = Math.min(value.length, MAX_CONTAINER_ENTRIES);
+                for (let index = 0; index < limit && enqueued < MAX_WALK_NODES; index += 1) {
+                    enqueue(value[index]);
+                }
                 continue;
             }
 
             if (Array.isArray(value.itemStacks)) {
-                for (const itemStack of value.itemStacks) {
+                const stackLimit = Math.min(value.itemStacks.length, MAX_CONTAINER_ENTRIES);
+                for (let stackIndex = 0; stackIndex < stackLimit; stackIndex += 1) {
+                    const itemStack = value.itemStacks[stackIndex];
                     if (!itemStack || typeof itemStack !== 'object') continue;
                     let stackItems = null;
                     for (const itemKey of allowedItemKeys) {
@@ -265,8 +354,9 @@
                         break;
                     }
                     if (stackItems) {
-                        for (const item of stackItems) {
-                            products.push(item);
+                        const itemLimit = Math.min(stackItems.length, MAX_CONTAINER_ENTRIES);
+                        for (let itemIndex = 0; itemIndex < itemLimit; itemIndex += 1) {
+                            products.push(stackItems[itemIndex]);
                             if (products.length >= MAX_EXTRACTED_ITEMS) break;
                         }
                     }
@@ -274,8 +364,12 @@
                 }
             }
 
-            for (const [key, child] of Object.entries(value)) {
-                if (key !== 'itemStacks' && child && typeof child === 'object') pending.push(child);
+            let visited = 0;
+            for (const key in value) {
+                if (visited >= MAX_CONTAINER_ENTRIES || enqueued >= MAX_WALK_NODES) break;
+                if (!Object.prototype.hasOwnProperty.call(value, key)) continue;
+                visited += 1;
+                if (key !== 'itemStacks') enqueue(value[key]);
             }
         }
 
@@ -300,9 +394,9 @@
         }
     }
 
-    function productsObject(entries) {
-        const products = Object.create(null);
-        for (const [id, product] of entries) products[id] = product;
+    function productsArray(entries) {
+        const products = [];
+        for (const [, product] of entries) products[products.length] = product;
         return products;
     }
 
@@ -313,6 +407,19 @@
         let activeScope = null;
         let activeContext = null;
         let activeContextSequence = -1;
+        let latestBaseScope = null;
+        let latestBaseSequence = 0;
+
+        function publicContext(context) {
+            if (!context) return null;
+            return {
+                query: context.query,
+                page: context.page,
+                storeId: context.storeId,
+                pageUrlAtRequest: context.pageUrlAtRequest,
+                pageUrlAtCapture: context.pageUrlAtCapture
+            };
+        }
 
         function post(mode, entries, context) {
             const message = {
@@ -321,8 +428,8 @@
                 type: PRODUCTS_TYPE,
                 mode,
                 revision,
-                context,
-                products: productsObject(entries)
+                context: publicContext(context),
+                products: productsArray(entries)
             };
             try {
                 target.postMessage(message, target.location.origin);
@@ -338,12 +445,33 @@
             }
         }
 
-        function ingestItems(items, context = null, requestSequence = 0) {
-            if (!Array.isArray(items) || items.length === 0) return;
+        function noteRequest(context, requestSequence) {
             const sequence = Number.isSafeInteger(requestSequence) && requestSequence >= 0
                 ? requestSequence
                 : 0;
             const normalizedContext = sanitizeContext(context, target.location.origin);
+            if (!normalizedContext || isLaterPage(normalizedContext)) return;
+            latestBaseScope = contextScope(normalizedContext);
+            latestBaseSequence = sequence;
+        }
+
+        function isActive(context, sequence) {
+            const scope = contextScope(context);
+            if (sequence === 0) return latestBaseSequence === 0;
+            if (isLaterPage(context)) {
+                if (latestBaseScope) return scope === latestBaseScope && sequence > latestBaseSequence;
+                return activeScope === null || scope === activeScope;
+            }
+            return scope === latestBaseScope && sequence >= latestBaseSequence;
+        }
+
+        function ingestItems(items, context = null, requestSequence = 0, { authoritative = false } = {}) {
+            if (!Array.isArray(items)) return false;
+            const sequence = Number.isSafeInteger(requestSequence) && requestSequence >= 0
+                ? requestSequence
+                : 0;
+            const normalizedContext = sanitizeContext(context, target.location.origin);
+            if (!normalizedContext || !isActive(normalizedContext, sequence)) return false;
             const scope = contextScope(normalizedContext);
             const batch = new Map();
             for (const item of items) {
@@ -354,25 +482,20 @@
                 batch.set(product.id, product);
                 while (batch.size > limit) batch.delete(batch.keys().next().value);
             }
-            if (batch.size === 0) return;
-
-            if (activeScope !== null && scope !== activeScope && sequence < activeContextSequence) {
-                report(target, 'debug', 'ignored late response from an older search', {
-                    query: normalizedContext && normalizedContext.query,
-                    requestSequence: sequence,
-                    activeRequestSequence: activeContextSequence
-                });
-                return;
-            }
+            const laterPage = isLaterPage(normalizedContext);
+            if (batch.size === 0 && (!authoritative || laterPage)) return false;
             if (scope !== activeScope) {
                 cache.clear();
                 activeScope = scope;
-                activeContext = normalizedContext;
-                activeContextSequence = sequence;
-            } else if (sequence >= activeContextSequence) {
-                activeContext = normalizedContext;
-                activeContextSequence = sequence;
             }
+
+            if (!laterPage) {
+                const newerEntries = [...cache.entries()].filter(([, product]) => product.requestSequence > sequence);
+                cache.clear();
+                for (const [id, product] of newerEntries) cache.set(id, product);
+            }
+            activeContext = normalizedContext;
+            activeContextSequence = Math.max(activeContextSequence, sequence);
 
             const accepted = new Map();
             for (const [id, product] of batch) {
@@ -383,9 +506,9 @@
                 accepted.set(id, product);
                 while (cache.size > limit) cache.delete(cache.keys().next().value);
             }
-            if (accepted.size === 0) return;
             revision += 1;
-            post('batch', accepted, normalizedContext);
+            const mode = laterPage ? 'batch' : 'snapshot';
+            post(mode, laterPage ? accepted : cache, normalizedContext);
             report(target, 'info', 'captured sanitized search products', {
                 revision,
                 query: normalizedContext && normalizedContext.query,
@@ -395,6 +518,7 @@
                 cachedProducts: cache.size,
                 requestSequence: sequence
             });
+            return true;
         }
 
         function handleMessage(event) {
@@ -407,7 +531,8 @@
         return {
             handleMessage,
             ingestItems,
-            snapshot() { return productsObject(cache); },
+            noteRequest,
+            snapshot() { return productsArray(cache); },
             context() { return activeContext; },
             revision() { return revision; }
         };
@@ -419,12 +544,15 @@
             : null;
         if (!element) return false;
         try {
-            const payload = JSON.parse(element.textContent || '');
+            const text = element.textContent || '';
+            if (!text || text.length > MAX_PRELOADED_TEXT_LENGTH) return false;
+            const payload = JSON.parse(text);
             const products = collectItemStackProducts(payload, ['itemsV2', 'items']);
             channel.ingestItems(
                 products,
                 initialNextDataContext(target, payload),
-                0
+                0,
+                { authoritative: true }
             );
             report(target, 'info', 'read initial search products from __NEXT_DATA__', {
                 products: products.length
@@ -446,10 +574,35 @@
         const expectedOrigin = target.location.origin;
         let nextRequestSequence = 1;
 
-        function captureResponse(response, requestUrl, context, requestSequence) {
+        function captureResponse(response, context, requestSequence) {
             if (!response || typeof response.clone !== 'function') return;
-            if (response.url && !allowedSearchUrl(response.url, baseHref, expectedOrigin)) {
-                report(target, 'warn', 'ignored search response redirected outside the allowlist', {
+            if (response.ok === false || (typeof response.status === 'number' && response.status !== 0
+                && (response.status < 200 || response.status >= 300))) {
+                report(target, 'warn', 'ignored unsuccessful Walmart search response', {
+                    query: context.query,
+                    requestSequence,
+                    status: response.status
+                });
+                return;
+            }
+            if (response.url) {
+                const finalUrl = allowedSearchUrl(response.url, baseHref, expectedOrigin);
+                const finalContext = finalUrl
+                    ? requestContext(finalUrl, context.pageUrlAtRequest, expectedOrigin)
+                    : null;
+                if (!finalContext || finalContext.query !== context.query || finalContext.page !== context.page
+                    || finalContext.storeId !== context.storeId
+                    || finalContext.variablesFingerprint !== context.variablesFingerprint) {
+                    report(target, 'warn', 'ignored Walmart search response with changed request identity', {
+                        query: context.query,
+                        requestSequence
+                    });
+                    return;
+                }
+            }
+            const contentType = response.headers?.get?.('content-type') || '';
+            if (contentType && !/\bjson\b/i.test(contentType)) {
+                report(target, 'warn', 'ignored non-JSON Walmart search response', {
                     query: context.query,
                     requestSequence
                 });
@@ -475,7 +628,7 @@
                 .then(() => clonedResponse.json())
                 .then(payload => {
                     const products = collectItemStackProducts(payload, ['itemsV2']);
-                    channel.ingestItems(products, context, requestSequence);
+                    channel.ingestItems(products, context, requestSequence, { authoritative: true });
                 })
                 .catch(error => report(target, 'error', 'failed to parse Walmart search response', {
                     ...errorDetails(error),
@@ -491,6 +644,13 @@
             const requestSequence = nextRequestSequence;
             nextRequestSequence += 1;
             const context = requestContext(requestUrl, target.location.href, expectedOrigin);
+            if (!context) {
+                report(target, 'warn', 'ignored Walmart search request with mismatched store context', {
+                    requestSequence
+                });
+                return responsePromise;
+            }
+            channel.noteRequest(context, requestSequence);
             report(target, 'info', 'observed Walmart search request', {
                 query: context.query,
                 page: context.page,
@@ -498,7 +658,7 @@
             });
 
             void Promise.resolve(responsePromise)
-                .then(response => captureResponse(response, requestUrl, context, requestSequence))
+                .then(response => captureResponse(response, context, requestSequence))
                 .catch(error => report(target, 'warn', 'Walmart search request rejected before capture', {
                     ...errorDetails(error),
                     query: context.query,

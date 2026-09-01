@@ -1,3 +1,34 @@
+import { formatUnitPrice, speakUnitPrice } from '../../ui/format.js';
+import { MAX_RENDERED_CARDS, publishApiScanState } from './scan-state.js';
+import { claimRuntimeInstall } from '../../runtime/install.js';
+import { areOnlyOwnedMutations } from '../../runtime/mutations.js';
+
+/*!
+ * Walmart card annotator. Scope-checked API/cache records join rendered cards
+ * through stable product IDs; rendered price text is never a trusted input.
+ * Frozen per-card models are published through the bundle-private WeakMap for
+ * sorting, with bounded scans and reversible annotations.
+ */
+
+// Capture collection operations before retailer scripts can monkey-patch the
+// page realm. The userscript deliberately shares that realm at document-start;
+// trusted API/cache reads must not dispatch through later mutable prototypes.
+const NativeMap = Map;
+const mapGet = Function.call.bind(Map.prototype.get);
+const mapSet = Function.call.bind(Map.prototype.set);
+const mapDelete = Function.call.bind(Map.prototype.delete);
+const mapClear = Function.call.bind(Map.prototype.clear);
+const mapKeys = Function.call.bind(Map.prototype.keys);
+const mapSize = Function.call.bind(Object.getOwnPropertyDescriptor(Map.prototype, 'size').get);
+const mapIteratorNext = Function.call.bind(Object.getPrototypeOf(new Map().keys()).next);
+const weakMapGet = Function.call.bind(WeakMap.prototype.get);
+const weakMapSet = Function.call.bind(WeakMap.prototype.set);
+const weakMapDelete = Function.call.bind(WeakMap.prototype.delete);
+const setAdd = Function.call.bind(Set.prototype.add);
+const setDelete = Function.call.bind(Set.prototype.delete);
+const setValues = Function.call.bind(Set.prototype.values);
+const setIteratorNext = Function.call.bind(Object.getPrototypeOf(new Set().values()).next);
+
 // This script runs on walmart.ca and extracts price, unit, and calculates price per unit
 class Unit {
     constructor(id, unit, regexString, scaleToStandard, standardAmount, scaleToStandardUnit) {
@@ -53,13 +84,19 @@ const bulkUnitRegexString = (() => {
 })();
 
 const processedSignatures = new WeakMap();
+const installClaimed = claimRuntimeInstall('walmart-content');
 const processedStates = new WeakMap();
-const apiProductsById = new Map();
+const managedProductContainers = new Set();
+const apiProductsById = new NativeMap();
 const API_BRIDGE_SOURCE = 'walmart-price-per-unit';
-const API_BRIDGE_VERSION = 1;
+const API_BRIDGE_VERSION = 2;
+const isProductArray = Array.isArray;
 const MAX_API_PRODUCTS = 500;
+const MAX_API_REVISION = 1_000_000;
+const MAX_API_REVISION_ADVANCE = 10_000;
 let apiProductRevision = 0;
 let apiProductScope = null;
+let apiMessageGeneration = 0;
 
 function reportApiStatus(level, message, details) {
     try {
@@ -76,42 +113,53 @@ function boundedString(value, maxLength) {
     return typeof value === 'string' && value.length <= maxLength ? value : null;
 }
 
-function boundedNumber(value, min = 0, max = 1_000_000) {
-    return typeof value === 'number' && Number.isFinite(value) && value >= min && value <= max ? value : null;
+function boundedPositiveNumber(value, max = 1_000_000) {
+    return typeof value === 'number' && Number.isFinite(value) && value > 0 && value <= max ? value : null;
 }
 
 function normalizeApiUnitPrice(value) {
     if (typeof value === 'string') return boundedString(value, 160);
     if (!value || typeof value !== 'object') return null;
+    const rawPrice = value.price;
+    const rawPriceString = value.priceString;
     const normalized = {
-        price: boundedNumber(value.price),
-        priceString: boundedString(value.priceString, 160)
+        price: boundedPositiveNumber(rawPrice),
+        priceString: boundedString(rawPriceString, 160)
     };
     return normalized.price === null && normalized.priceString === null ? null : normalized;
 }
 
 function normalizeApiProduct(value) {
     if (!value || typeof value !== 'object') return null;
-    const id = boundedString(value.id, 160);
-    const name = boundedString(value.name, 1_500);
-    const price = value.price === null || value.price === undefined ? null : boundedNumber(value.price);
-    const averagePrice = value.averagePrice === null || value.averagePrice === undefined
+    const rawId = value.id;
+    const rawName = value.name;
+    const rawPrice = value.price;
+    const rawAveragePrice = value.averagePrice;
+    const rawUnitPrice = value.unitPrice;
+    const rawVariableOptions = value.variableOptions;
+    const rawCurrentVariantConfirmed = value.currentVariantConfirmed;
+    const rawCurrentVariantName = value.currentVariantName;
+    const rawRequestSequence = value.requestSequence;
+    const id = boundedString(rawId, 160);
+    const name = boundedString(rawName, 1_500);
+    const price = rawPrice === null || rawPrice === undefined ? null : boundedPositiveNumber(rawPrice);
+    const averagePrice = rawAveragePrice === null || rawAveragePrice === undefined
         ? null
-        : boundedNumber(value.averagePrice);
-    if (!id || !name || (value.price !== null && value.price !== undefined && price === null) ||
-        (value.averagePrice !== null && value.averagePrice !== undefined && averagePrice === null) ||
+        : boundedPositiveNumber(rawAveragePrice);
+    if (!id || !name || (rawPrice !== null && rawPrice !== undefined && price === null) ||
+        (rawAveragePrice !== null && rawAveragePrice !== undefined && averagePrice === null) ||
         !/^[a-zA-Z0-9._:-]+$/.test(id)) return null;
     return {
         id,
         name,
         price,
         averagePrice,
-        unitPrice: normalizeApiUnitPrice(value.unitPrice),
-        variableOptions: typeof value.variableOptions === 'boolean' ? value.variableOptions : null,
-        currentVariantConfirmed: typeof value.currentVariantConfirmed === 'boolean' ? value.currentVariantConfirmed : null,
-        currentVariantName: boundedString(value.currentVariantName, 256),
-        requestSequence: Number.isSafeInteger(value.requestSequence) && value.requestSequence >= 0
-            ? value.requestSequence
+        unitPrice: normalizeApiUnitPrice(rawUnitPrice),
+        variableOptions: typeof rawVariableOptions === 'boolean' ? rawVariableOptions : null,
+        currentVariantConfirmed: typeof rawCurrentVariantConfirmed === 'boolean' ? rawCurrentVariantConfirmed : null,
+        currentVariantName: boundedString(rawCurrentVariantName, 256),
+        requestSequence: Number.isSafeInteger(rawRequestSequence) && rawRequestSequence >= 0
+            ? rawRequestSequence
             : null
     };
 }
@@ -119,6 +167,11 @@ function normalizeApiProduct(value) {
 function normalizeApiQuery(value) {
     const query = boundedString(value, 256)?.trim();
     return query ? query.normalize('NFKC').replace(/\s+/g, ' ').toLowerCase() : null;
+}
+
+function normalizeApiStoreId(value) {
+    if (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0) return String(value);
+    return boundedString(value, 80)?.trim().toLowerCase() || null;
 }
 
 function safeApiPagePath(value) {
@@ -135,14 +188,33 @@ function safeApiPagePath(value) {
     }
 }
 
+function apiPageIdentity(value) {
+    const pagePath = safeApiPagePath(value);
+    if (pagePath === null) return null;
+    const url = new URL(pagePath, window.location.origin);
+    const parameters = [...url.searchParams.entries()]
+        .filter(([key]) => !/^(?:q|page)$/i.test(key))
+        .sort(([leftKey, leftValue], [rightKey, rightValue]) =>
+            leftKey.localeCompare(rightKey) || leftValue.localeCompare(rightValue));
+    const suffix = parameters.map(([key, item]) => `${encodeURIComponent(key)}=${encodeURIComponent(item)}`).join('&');
+    return `${url.pathname.replace(/\/$/, '')}${suffix ? `?${suffix}` : ''}`;
+}
+
 function normalizeApiContext(value) {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    const rawQuery = value.query;
+    const rawPage = value.page;
+    const rawStoreId = value.storeId;
+    const rawPageUrlAtRequest = value.pageUrlAtRequest;
+    const rawPageUrlAtCapture = value.pageUrlAtCapture;
     const context = {
-        query: value.query === null ? null : normalizeApiQuery(value.query),
-        page: Number.isSafeInteger(value.page) && value.page >= 0 && value.page <= 10_000 ? value.page : null,
-        pageUrlAtRequest: safeApiPagePath(value.pageUrlAtRequest),
-        pageUrlAtCapture: safeApiPagePath(value.pageUrlAtCapture)
+        query: rawQuery === null ? null : normalizeApiQuery(rawQuery),
+        page: Number.isSafeInteger(rawPage) && rawPage >= 0 && rawPage <= 10_000 ? rawPage : null,
+        storeId: normalizeApiStoreId(rawStoreId),
+        pageUrlAtRequest: safeApiPagePath(rawPageUrlAtRequest),
+        pageUrlAtCapture: safeApiPagePath(rawPageUrlAtCapture)
     };
+    context.pageIdentity = apiPageIdentity(context.pageUrlAtRequest || context.pageUrlAtCapture);
     if (context.query === null && context.pageUrlAtRequest === null && context.pageUrlAtCapture === null) return null;
     return context;
 }
@@ -150,9 +222,16 @@ function normalizeApiContext(value) {
 function currentApiPageContext() {
     try {
         const url = new URL(window.location.href);
+        let storeId = null;
+        for (const key of ['store', 'storeId', 'store_id']) {
+            storeId = normalizeApiStoreId(url.searchParams.get(key));
+            if (storeId) break;
+        }
         return {
             query: normalizeApiQuery(url.searchParams.get('q')),
-            pagePath: `${url.pathname}${url.search}`
+            storeId,
+            pagePath: `${url.pathname}${url.search}`,
+            pageIdentity: apiPageIdentity(`${url.pathname}${url.search}`)
         };
     } catch (_error) {
         return { query: null, pagePath: null };
@@ -161,110 +240,161 @@ function currentApiPageContext() {
 
 function apiContextMatchesCurrentPage(context) {
     const current = currentApiPageContext();
-    if (context.query !== null) return context.query === current.query;
-    return current.pagePath !== null &&
-        (context.pageUrlAtCapture === current.pagePath || context.pageUrlAtRequest === current.pagePath);
+    if (context.query !== null) return context.query === current.query
+        && (current.storeId === null || context.storeId === current.storeId)
+        && context.pageIdentity !== null && context.pageIdentity === current.pageIdentity;
+    return current.pageIdentity !== null && context.pageIdentity === current.pageIdentity;
 }
 
 function scopeForApiContext(context) {
-    if (context.query !== null) return `query:${context.query}`;
-    return `page:${context.pageUrlAtCapture || context.pageUrlAtRequest}`;
+    if (context.query !== null) return `query:${context.query}|page:${context.pageIdentity || ''}`;
+    return `page:${context.pageIdentity || ''}`;
 }
 
 function currentApiScope() {
     const current = currentApiPageContext();
-    if (current.query !== null) return `query:${current.query}`;
-    return current.pagePath === null ? null : `page:${current.pagePath}`;
+    if (current.query !== null) return `query:${current.query}|page:${current.pageIdentity || ''}`;
+    return current.pageIdentity === null ? null : `page:${current.pageIdentity}`;
 }
 
 function apiProductForContainer(container) {
     const activeScope = currentApiScope();
     if (activeScope === null || apiProductScope !== activeScope) return null;
     const productId = container.getAttribute('data-item-id');
-    return productId ? apiProductsById.get(productId) || null : null;
+    return productId ? mapGet(apiProductsById, productId) || null : null;
 }
 
-function ingestApiProductsMessage(event) {
-    const message = event.data;
-    if (!message || message.source !== API_BRIDGE_SOURCE || message.type !== 'api-products') return false;
+function ingestApiProductsMessageTransaction(event) {
     if (event.source !== window || event.origin !== window.location?.origin) {
         reportApiStatus('warn', 'rejected product message from an unexpected origin');
         return false;
     }
-    if (!message || message.source !== API_BRIDGE_SOURCE || message.version !== API_BRIDGE_VERSION ||
-        message.type !== 'api-products' || !['batch', 'snapshot'].includes(message.mode) ||
-        !message.products || typeof message.products !== 'object' || Array.isArray(message.products)) {
+    const transactionGeneration = ++apiMessageGeneration;
+    const message = event.data;
+    if (!message || typeof message !== 'object') return false;
+    const source = message.source;
+    const version = message.version;
+    const type = message.type;
+    const mode = message.mode;
+    const productsPayload = message.products;
+    const contextPayload = message.context;
+    const revisionPayload = message.revision;
+    if (source !== API_BRIDGE_SOURCE || type !== 'api-products') return false;
+    if (source !== API_BRIDGE_SOURCE || version !== API_BRIDGE_VERSION ||
+        type !== 'api-products' || !['batch', 'snapshot'].includes(mode) ||
+        !isProductArray(productsPayload)) {
         reportApiStatus('warn', 'rejected malformed product message');
         return false;
     }
-    const context = normalizeApiContext(message.context);
+    const productCount = productsPayload.length;
+    if (!Number.isSafeInteger(productCount) || productCount < 0 || productCount > MAX_API_PRODUCTS) {
+        reportApiStatus('warn', 'rejected oversized product message');
+        return false;
+    }
+    const context = normalizeApiContext(contextPayload);
     if (!context || !apiContextMatchesCurrentPage(context)) {
         reportApiStatus('debug', 'ignored product message for a different search', {
             messageQuery: context?.query ?? null,
             currentQuery: currentApiPageContext().query,
-            revision: message.revision
+            revision: revisionPayload
         });
         return false;
     }
-    const revision = Number.isSafeInteger(message.revision) && message.revision >= 0 ? message.revision : 0;
-    if (revision < apiProductRevision) {
-        reportApiStatus('debug', 'ignored an older product revision', {
+    if (!Number.isSafeInteger(revisionPayload) || revisionPayload < 0
+        || revisionPayload > MAX_API_REVISION) {
+        reportApiStatus('warn', 'rejected malformed product revision');
+        return false;
+    }
+    const revision = revisionPayload;
+    if (revision < apiProductRevision || revision - apiProductRevision > MAX_API_REVISION_ADVANCE) {
+        reportApiStatus('debug', 'ignored an out-of-sequence product revision', {
             revision,
             activeRevision: apiProductRevision
         });
         return false;
     }
-    const productIds = Object.keys(message.products);
-    if (productIds.length > MAX_API_PRODUCTS) {
-        reportApiStatus('warn', 'rejected oversized product message', { products: productIds.length });
-        return false;
-    }
     const nextScope = scopeForApiContext(context);
-    let changed = false;
-    if (message.mode === 'snapshot' || nextScope !== apiProductScope) {
-        changed = apiProductsById.size > 0 || nextScope !== apiProductScope;
-        apiProductsById.clear();
-        apiProductScope = nextScope;
-    }
-    for (const productId of productIds) {
-        const value = message.products[productId];
+    const normalizedProducts = [];
+    const normalizedProductIds = new NativeMap();
+    for (let index = 0; index < productCount; index += 1) {
+        const value = productsPayload[index];
         const product = normalizeApiProduct(value);
-        if (!product || product.id !== productId) continue;
-        const previous = apiProductsById.get(product.id);
+        if (!product) continue;
+        if (mapGet(normalizedProductIds, product.id)) return false;
+        mapSet(normalizedProductIds, product.id, true);
+        normalizedProducts.push(product);
+    }
+    if (transactionGeneration !== apiMessageGeneration) return false;
+    const nextProducts = new NativeMap();
+    const replacesCache = mode === 'snapshot' || nextScope !== apiProductScope;
+    if (!replacesCache) {
+        const currentKeys = mapKeys(apiProductsById);
+        for (let step = mapIteratorNext(currentKeys); !step.done; step = mapIteratorNext(currentKeys)) {
+            mapSet(nextProducts, step.value, mapGet(apiProductsById, step.value));
+        }
+    }
+    let changed = replacesCache && (mapSize(apiProductsById) > 0 || nextScope !== apiProductScope);
+    for (const product of normalizedProducts) {
+        const previous = mapGet(nextProducts, product.id);
         if (previous && previous.requestSequence !== null && product.requestSequence !== null &&
             previous.requestSequence > product.requestSequence) continue;
         if (JSON.stringify(previous) === JSON.stringify(product)) continue;
-        apiProductsById.delete(product.id);
-        apiProductsById.set(product.id, product);
+        mapDelete(nextProducts, product.id);
+        mapSet(nextProducts, product.id, product);
         changed = true;
     }
-    while (apiProductsById.size > MAX_API_PRODUCTS) apiProductsById.delete(apiProductsById.keys().next().value);
+    while (mapSize(nextProducts) > MAX_API_PRODUCTS) {
+        mapDelete(nextProducts, mapIteratorNext(mapKeys(nextProducts)).value);
+        changed = true;
+    }
+    // Commit only after every message-owned property has been read and
+    // normalized successfully. A throwing accessor cannot partially replace
+    // the last accepted current-scope cache.
+    mapClear(apiProductsById);
+    const nextKeys = mapKeys(nextProducts);
+    for (let step = mapIteratorNext(nextKeys); !step.done; step = mapIteratorNext(nextKeys)) {
+        mapSet(apiProductsById, step.value, mapGet(nextProducts, step.value));
+    }
+    apiProductScope = nextScope;
     apiProductRevision = Math.max(apiProductRevision, revision);
     reportApiStatus('info', 'accepted sanitized product message', {
-        mode: message.mode,
+        mode,
         revision,
         query: context.query,
         page: context.page,
-        receivedProducts: productIds.length,
-        cachedProducts: apiProductsById.size,
+        receivedProducts: productCount,
+        cachedProducts: mapSize(apiProductsById),
         changed
     });
     if (changed) processProducts(true, {
-        mode: message.mode,
+            mode,
         revision,
         query: context.query,
-        receivedProducts: productIds.length
+        receivedProducts: productCount
     });
     return changed;
 }
 
-window.addEventListener('message', ingestApiProductsMessage);
-reportApiStatus('info', 'isolated bridge ready; requesting captured product snapshot');
-window.postMessage?.({
-    source: API_BRIDGE_SOURCE,
-    version: API_BRIDGE_VERSION,
-    type: 'api-products-request'
-}, window.location?.origin || '*');
+function ingestApiProductsMessage(event) {
+    try {
+        return ingestApiProductsMessageTransaction(event);
+    } catch (error) {
+        reportApiStatus('warn', 'rejected non-transactional product message', {
+            message: String(error?.message || error).slice(0, 240)
+        });
+        return false;
+    }
+}
+
+if (installClaimed) {
+    window.addEventListener('message', ingestApiProductsMessage);
+    reportApiStatus('info', 'page-world bridge ready; requesting captured product snapshot');
+    window.postMessage?.({
+        source: API_BRIDGE_SOURCE,
+        version: API_BRIDGE_VERSION,
+        type: 'api-products-request'
+    }, window.location?.origin || '*');
+}
 
 function getUnit(unitText) {
     if (typeof unitText !== 'string') return null;
@@ -287,6 +417,8 @@ function parseWalmartPricePerUnitText(pricePerUnitText) {
     let value = parseFloat(match[1] || match[2]);
     if (match[2]) value = value / 100; // convert cents to dollars
     const amount = match[3] ? parseFloat(match[3]) : 1;
+    if (!Number.isFinite(value) || value <= 0 || value > 1_000_000_000
+        || !Number.isFinite(amount) || amount <= 0 || amount > 1_000_000_000) return null;
     const unit = match[4].toLowerCase();
     const parsedUnit = getUnit(unit);
     if (!parsedUnit) return null;
@@ -575,7 +707,7 @@ function resolveVariableOptionUnit(apiProduct, sourceTitle, unitObj) {
 }
 
 function pricePerStandardUnit(price, unitObj) {
-    if (!Number.isFinite(price) || price < 0 || !unitObj ||
+    if (!Number.isFinite(price) || price <= 0 || price > 1_000_000 || !unitObj ||
         !Number.isFinite(unitObj.amount) || unitObj.amount <= 0 ||
         !Number.isFinite(unitObj.unit?.ScaleToStandard)) return null;
     return price / (unitObj.amount * unitObj.unit.ScaleToStandard);
@@ -601,7 +733,7 @@ function clearSortModel(container) {
 }
 
 function showPricePerUnit(container, price, unitObj, _promo, _couponValue, walmartPricePerUnit) {
-    const hasPackageBasis = Number.isFinite(price) && price >= 0 && unitObj;
+    const hasPackageBasis = Number.isFinite(price) && price > 0 && price <= 1_000_000 && unitObj;
     if (!hasPackageBasis && !walmartPricePerUnit) {
         clearSortModel(container);
         return;
@@ -651,11 +783,14 @@ function showPricePerUnit(container, price, unitObj, _promo, _couponValue, walma
         container.dataset.ppuSortDimension = sortable.dimension;
         container.dataset.ppuSortUnit = sortable.unit;
         infoDiv.dataset.source = usedWalmartPPU ? 'retailer' : 'calculated';
-        infoDiv.textContent = `${sortable.value.toFixed(2)} ${sortable.unit.replace('CAD', '$')} (${usedWalmartPPU ? 'retailer API' : 'calculated from retailer API'})`;
+        const origin = usedWalmartPPU ? 'Retailer' : 'Calculated';
+        infoDiv.textContent = `${formatUnitPrice(sortable.value, sortable.unit)} · ${origin}`;
+        infoDiv.title = usedWalmartPPU ? 'Unit price supplied by the retailer API' : 'Calculated from retailer API package and price data';
+        const description = `${infoDiv.title[0].toLowerCase()}${infoDiv.title.slice(1)}`;
+        infoDiv.setAttribute('aria-label', `${speakUnitPrice(sortable.value, sortable.unit)}, ${description}`);
     } else {
-        delete container.dataset.ppuSortValue;
-        delete container.dataset.ppuSortDimension;
-        delete container.dataset.ppuSortUnit;
+        clearSortModel(container);
+        return;
     }
 
     // Insert after price
@@ -670,7 +805,7 @@ function showPricePerUnit(container, price, unitObj, _promo, _couponValue, walma
 }
 
 function normalizePriceForSorting(pricePerUnit, unit) {
-    if (!Number.isFinite(pricePerUnit) || pricePerUnit < 0 || !unit) return null;
+    if (!Number.isFinite(pricePerUnit) || pricePerUnit <= 0 || pricePerUnit > 1_000_000_000 || !unit) return null;
     switch (unit) {
         case Unit.Gram:
         case Unit.Kilogram:
@@ -741,7 +876,7 @@ function productSourceSignature(container, apiProduct = null) {
     ]);
 }
 
-function extensionStateSignature(container) {
+function ownedStateSignature(container) {
     const annotation = container.querySelector('.price-per-unit-info');
     return JSON.stringify([
         Boolean(annotation),
@@ -753,9 +888,69 @@ function extensionStateSignature(container) {
     ]);
 }
 
+function ownedNode(node) {
+    const element = node?.nodeType === Node.ELEMENT_NODE ? node : node?.parentElement;
+    return Boolean(element?.matches?.('#lups-control, #ppu-sort-control, .price-per-unit-info, .ppu-walmart-icon, [data-lups-annotation]') ||
+        element?.closest?.('#lups-control, #ppu-sort-control, .price-per-unit-info, .ppu-walmart-icon, [data-lups-annotation]'));
+}
+
+function ownedMutation(mutation) {
+    if (mutation.type === 'attributes' && mutation.attributeName?.startsWith('data-ppu-')) return true;
+    if (ownedNode(mutation.target)) return true;
+    const changedNodes = [...mutation.addedNodes, ...mutation.removedNodes];
+    return changedNodes.length > 0 && changedNodes.every(ownedNode);
+}
+
 // Select all product containers (adjust selector as needed)
 function processProducts(isForced = false, apiReport = null) {
         const productContainers = document.querySelectorAll('[data-item-id]');
+        let exposedStateChanged = false;
+        if (productContainers.length > MAX_RENDERED_CARDS) {
+            const managedIterator = setValues(managedProductContainers);
+            for (let step = setIteratorNext(managedIterator); !step.done; step = setIteratorNext(managedIterator)) {
+                const container = step.value;
+                const previousState = ownedStateSignature(container);
+                clearSortModel(container);
+                delete container.dataset.ppuTotalPrice;
+                delete container.dataset.ppuDataSource;
+                delete container.dataset.ppuProcessingError;
+                weakMapDelete(processedSignatures, container);
+                weakMapDelete(processedStates, container);
+                setDelete(managedProductContainers, container);
+                exposedStateChanged ||= previousState !== ownedStateSignature(container);
+            }
+            const publication = publishApiScanState({ accepted: false, renderedCards: 0, apiCards: 0 }, []);
+            if (exposedStateChanged || publication.changed) window.dispatchEvent(new CustomEvent('ppu-products-updated'));
+            reportApiStatus('warn', 'skipped an oversized rendered product set', {
+                renderedCardNodes: productContainers.length,
+                maximum: MAX_RENDERED_CARDS
+            });
+            return;
+        }
+        // Virtualized Walmart cards can temporarily lose their identity
+        // attribute. Reconcile containers we previously annotated before the
+        // current selector drops them, so stale prices never survive recycling.
+        const managedIterator = setValues(managedProductContainers);
+        for (let step = setIteratorNext(managedIterator); !step.done; step = setIteratorNext(managedIterator)) {
+            const container = step.value;
+            if (!container.isConnected) {
+                weakMapDelete(processedSignatures, container);
+                weakMapDelete(processedStates, container);
+                setDelete(managedProductContainers, container);
+                continue;
+            }
+            if (container.getAttribute('data-item-id')) continue;
+            const previousState = ownedStateSignature(container);
+            clearSortModel(container);
+            delete container.dataset.ppuTotalPrice;
+            delete container.dataset.ppuDataSource;
+            delete container.dataset.ppuProcessingError;
+            weakMapDelete(processedSignatures, container);
+            weakMapDelete(processedStates, container);
+            setDelete(managedProductContainers, container);
+            exposedStateChanged ||= previousState !== ownedStateSignature(container);
+        }
+        const trustedModels = [];
         const scan = {
             renderedCards: 0,
             apiCards: 0,
@@ -764,40 +959,56 @@ function processProducts(isForced = false, apiReport = null) {
             errors: 0
         };
         productContainers.forEach(container => {
+            const previousState = ownedStateSignature(container);
             try {
             // Get product ID
             const productId = container.getAttribute('data-item-id');
             if (!productId) return;
+            setAdd(managedProductContainers, container);
             if (getComputedStyle(container).display === 'none') {
                 clearSortModel(container);
                 delete container.dataset.ppuTotalPrice;
                 delete container.dataset.ppuProcessingError;
-                processedSignatures.delete(container);
-                processedStates.delete(container);
+                weakMapDelete(processedSignatures, container);
+                weakMapDelete(processedStates, container);
                 delete container.dataset.ppuDataSource;
+                exposedStateChanged ||= previousState !== ownedStateSignature(container);
                 return;
             }
             scan.renderedCards += 1;
             const apiProduct = apiProductForContainer(container);
             const signature = productSourceSignature(container, apiProduct);
-            if (!isForced && processedSignatures.get(container) === signature &&
-                processedStates.get(container) === extensionStateSignature(container)) return;
+            if (apiProduct) scan.apiCards += 1;
+            else scan.missingApiCards += 1;
+            if (!isForced && weakMapGet(processedSignatures, container) === signature &&
+                weakMapGet(processedStates, container) === ownedStateSignature(container)) {
+                if (container.dataset.ppuSortDimension && container.dataset.ppuSortValue) scan.sortableCards += 1;
+                trustedModels.push({
+                    card: container,
+                    matched: Boolean(apiProduct),
+                    normalizedUnitPrice: Number(container.dataset.ppuSortValue),
+                    currentPrice: Number(container.dataset.ppuTotalPrice),
+                    dimension: container.dataset.ppuSortDimension
+                });
+                return;
+            }
 
             if (!apiProduct) {
                 clearSortModel(container);
                 delete container.dataset.ppuTotalPrice;
                 delete container.dataset.ppuDataSource;
                 delete container.dataset.ppuProcessingError;
-                processedSignatures.set(container, signature);
-                processedStates.set(container, extensionStateSignature(container));
-                scan.missingApiCards += 1;
+                weakMapSet(processedSignatures, container, signature);
+                const nextState = ownedStateSignature(container);
+                weakMapSet(processedStates, container, nextState);
+                exposedStateChanged ||= previousState !== nextState;
+                trustedModels.push({ card: container, matched: false });
                 return;
             }
 
-            scan.apiCards += 1;
             const price = apiProduct.price;
             const sortableTotalPrice = Number.isFinite(price) ? price : apiProduct.averagePrice;
-            if (Number.isFinite(sortableTotalPrice) && sortableTotalPrice >= 0) {
+            if (Number.isFinite(sortableTotalPrice) && sortableTotalPrice > 0 && sortableTotalPrice <= 1_000_000) {
                 container.dataset.ppuTotalPrice = String(sortableTotalPrice);
             }
             else delete container.dataset.ppuTotalPrice;
@@ -811,16 +1022,27 @@ function processProducts(isForced = false, apiReport = null) {
             }
             container.dataset.ppuDataSource = 'api';
             showPricePerUnit(container, price, unitObj, promo, couponValue, walmartPricePerUnit);
-            processedSignatures.set(container, signature);
-            processedStates.set(container, extensionStateSignature(container));
+            weakMapSet(processedSignatures, container, signature);
+            const nextState = ownedStateSignature(container);
+            weakMapSet(processedStates, container, nextState);
+            exposedStateChanged ||= previousState !== nextState;
             if (container.dataset.ppuSortDimension && container.dataset.ppuSortValue) scan.sortableCards += 1;
+            trustedModels.push({
+                card: container,
+                matched: true,
+                normalizedUnitPrice: Number(container.dataset.ppuSortValue),
+                currentPrice: Number(container.dataset.ppuTotalPrice),
+                dimension: container.dataset.ppuSortDimension
+            });
             delete container.dataset.ppuProcessingError;
             } catch (error) {
                 // One malformed or newly half-rendered card must not prevent
                 // later products from being processed. Keep diagnostics local.
                 container.dataset.ppuProcessingError = String(error?.message || error).slice(0, 160);
-                processedSignatures.delete(container);
-                processedStates.delete(container);
+                weakMapDelete(processedSignatures, container);
+                weakMapDelete(processedStates, container);
+                exposedStateChanged ||= previousState !== ownedStateSignature(container);
+                trustedModels.push({ card: container, matched: false });
                 scan.errors += 1;
                 reportApiStatus('error', 'failed to process a product card', {
                     productId: container.getAttribute('data-item-id') || null,
@@ -828,47 +1050,70 @@ function processProducts(isForced = false, apiReport = null) {
                 });
             }
         });
-        window.dispatchEvent(new CustomEvent('ppu-products-updated'));
+        const publication = publishApiScanState({
+            accepted: apiProductScope !== null && apiProductScope === currentApiScope(),
+            renderedCards: scan.renderedCards,
+            apiCards: scan.apiCards
+        }, trustedModels);
+        if (exposedStateChanged || publication.changed) window.dispatchEvent(new CustomEvent('ppu-products-updated'));
         if (apiReport) {
             reportApiStatus('info', 'applied product data to rendered cards', {
                 ...apiReport,
-                cachedApiProducts: apiProductsById.size,
+                cachedApiProducts: mapSize(apiProductsById),
                 totalCardNodes: productContainers.length,
                 ...scan
             });
         }
 }
 
-// Initial run
-processProducts();
-
 // Re-run when DOM changes
-let productScanTimer;
+let productScanTimer = null;
 function scheduleProductScan() {
-    clearTimeout(productScanTimer);
-    productScanTimer = setTimeout(() => processProducts(), 150);
+    if (productScanTimer !== null) return;
+    productScanTimer = setTimeout(() => {
+        productScanTimer = null;
+        processProducts();
+    }, 150);
 }
-const productObserver = new MutationObserver(mutations => {
-    const extensionOnly = mutations.every(mutation =>
-        mutation.target.closest?.('#ppu-sort-control, .price-per-unit-info, .ppu-walmart-icon')
-    );
-    if (!extensionOnly) scheduleProductScan();
-});
-productObserver.observe(document.body, {
-    attributes: true,
-    attributeFilter: [
-        'class', 'hidden', 'data-item-id', 'data-ppu-total-price',
-        'data-ppu-sort-value', 'data-ppu-sort-dimension', 'data-ppu-sort-unit'
-    ],
-    childList: true,
-    characterData: true,
-    subtree: true
-});
-window.addEventListener('scroll', scheduleProductScan, { passive: true });
+let productObserver;
+let productProcessingStarted = false;
+let observedApiScope = currentApiScope();
 
-// Re-run when unit preference changes
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (message.type === 'unitPreferenceChanged') {
-        processProducts(true);
-    }
-});
+function detectPageScopeChange() {
+    const nextScope = currentApiScope();
+    if (nextScope === observedApiScope) return;
+    observedApiScope = nextScope;
+    scheduleProductScan();
+}
+
+function startProductProcessing() {
+    if (productProcessingStarted || !document.body) return;
+    productProcessingStarted = true;
+    processProducts();
+    productObserver = new MutationObserver(mutations => {
+        const ownedOnly = areOnlyOwnedMutations(mutations, ownedMutation);
+        if (!ownedOnly) scheduleProductScan();
+    });
+    productObserver.observe(document.body, {
+        attributes: true,
+        attributeFilter: [
+            'class', 'hidden', 'data-item-id', 'data-ppu-total-price',
+            'data-ppu-sort-value', 'data-ppu-sort-dimension', 'data-ppu-sort-unit'
+        ],
+        childList: true,
+        characterData: true,
+        subtree: true
+    });
+    window.addEventListener('scroll', scheduleProductScan, { passive: true });
+    // pushState/replaceState do not emit a browser navigation event. A small
+    // page-lifetime scope watcher makes URL-only Walmart transitions promptly
+    // invalidate stale annotations without modifying the retailer's History
+    // methods or relying on unrelated DOM churn.
+    window.addEventListener('popstate', detectPageScopeChange, { passive: true });
+    setInterval(detectPageScopeChange, 200);
+}
+
+if (installClaimed) {
+    if (document.body) startProductProcessing();
+    else document.addEventListener('DOMContentLoaded', startProductProcessing, { once: true });
+}

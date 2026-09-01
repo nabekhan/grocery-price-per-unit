@@ -1,0 +1,10 @@
+{
+  "releases": {
+    "2.0.7": {
+      "userscriptSha256": "798b564f121909b3cc2bd7b7199aeb145385e1bd139f7ea579864d6d1068d48b"
+    },
+    "2.0.8": {
+      "userscriptSha256": "313da1934777d3344c3cb23691153882e873f60836823cc92f7d50b6a5e4815a"
+    }
+  }
+}

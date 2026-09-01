@@ -1,3 +1,7 @@
+/*!
+ * Canonical conversion factors normalize quantities to kilograms, litres, or
+ * items while retaining an explicit dimension for comparison safety.
+ */
 export const UNITS = Object.freeze({
   mg: { dimension: 'mass', baseFactor: 0.000001, normalizedUnit: '$/kg' },
   g: { dimension: 'mass', baseFactor: 0.001, normalizedUnit: '$/kg' },
@@ -22,4 +26,3 @@ export function canonicalUnit(raw) {
   const aliases = { milligram: 'mg', milligrams: 'mg', gram: 'g', grams: 'g', kilogram: 'kg', kilograms: 'kg', ounce: 'oz', ounces: 'oz', pound: 'lb', pounds: 'lb', millilitre: 'ml', millilitres: 'ml', milliliter: 'ml', milliliters: 'ml', litre: 'l', litres: 'l', liter: 'l', liters: 'l', pcs: 'count', pieces: 'count', pc: 'count', units: 'count' };
   return aliases[key] || key;
 }
-

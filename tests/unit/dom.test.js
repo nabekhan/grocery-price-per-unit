@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
-import { extractGrid } from '../../src/retailers/loblaw/site.js';
+import { extractGrid, findProductGrid } from '../../src/retailers/loblaw/site.js';
+import { MAX_RENDERED_CARDS } from '../../src/retailers/limits.js';
 
 const fixture = fs.readFileSync('tests/fixtures/product-grid.html', 'utf8');
 beforeEach(() => { document.documentElement.innerHTML = fixture.match(/<html>([\s\S]*)<\/html>/)[1]; });
@@ -41,5 +42,37 @@ describe('sanitized current-card variants', () => {
     expect(chicken.currentPrice).toBeNull();
     expect(chicken.normalizedUnitPrice).toBeNull();
     expect(chicken.source).toBe('unknown');
+  });
+
+  it('fails open before ancestor work on an oversized fallback title set', () => {
+    document.body.innerHTML = `<main>${Array.from({ length: MAX_RENDERED_CARDS + 1 }, (_, index) =>
+      `<article><h3 data-testid="product-title">Product ${index}</h3></article>`).join('')}</main>`;
+    const subtreeQueries = vi.spyOn(Element.prototype, 'querySelectorAll');
+    expect(findProductGrid(document)).toBeNull();
+    expect(subtreeQueries).not.toHaveBeenCalled();
+    subtreeQueries.mockRestore();
+  });
+
+  it('groups fallback cards without repeated ancestor subtree queries', () => {
+    document.body.innerHTML = `<main>${Array.from({ length: 100 }, (_, index) =>
+      `<article data-product-id="${index}"><h3 data-testid="product-title">Product ${index}</h3></article>`).join('')}</main>`;
+    const subtreeQueries = vi.spyOn(Element.prototype, 'querySelectorAll');
+    const match = findProductGrid(document);
+    expect(match?.[1]).toHaveLength(100);
+    expect(subtreeQueries).not.toHaveBeenCalled();
+    subtreeQueries.mockRestore();
+  });
+
+  it('caps cumulative semantic-grid child inspection independently of matches', () => {
+    const children = Array.from({ length: MAX_RENDERED_CARDS }, (_, index) => `<div>Ordinary ${index}</div>`).join('');
+    document.body.innerHTML = `<main data-testid="listing-page-container">
+      <section data-testid="product-grid-component">${children}</section>
+      <section data-testid="product-grid-component">${children}</section>
+    </main>`;
+    const childQueries = vi.spyOn(Element.prototype, 'querySelector');
+    expect(findProductGrid(document)).toBeNull();
+    const titleQueries = childQueries.mock.calls.filter(([selector]) => selector === '[data-testid="product-title"]');
+    expect(titleQueries.length).toBe(MAX_RENDERED_CARDS);
+    childQueries.mockRestore();
   });
 });

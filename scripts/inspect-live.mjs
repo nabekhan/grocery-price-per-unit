@@ -1,38 +1,49 @@
 import { webkit } from '@playwright/test';
 import fs from 'node:fs/promises';
 
-const site = process.argv[2] || 'https://www.realcanadiansuperstore.ca/search?search-bar=milk';
+/*
+ * One low-frequency screenshot/metrics probe for an explicitly supplied live
+ * results URL. It installs the exact generated userscript at document start,
+ * never clicks page controls, and reports only bounded technical evidence.
+ */
+if (process.env.LIVE_SITE !== '1') {
+  throw new Error('Set LIVE_SITE=1 to contact a live storefront');
+}
+
+const allowedHosts = new Set([
+  'www.realcanadiansuperstore.ca',
+  'www.nofrills.ca',
+  'www.walmart.ca',
+  'www.saveonfoods.com'
+]);
+const target = new URL(process.argv[2] || 'https://www.realcanadiansuperstore.ca/search?search-bar=milk');
+if (target.protocol !== 'https:' || !allowedHosts.has(target.hostname)) {
+  throw new Error(`Unsupported live-inspection origin: ${target.origin}`);
+}
 const label = process.argv[3] || 'inspection';
+if (!/^[a-z0-9-]{1,80}$/.test(label)) throw new Error('Screenshot label must use 1–80 lowercase letters, digits, or hyphens');
+
+const userscript = await fs.readFile('dist/userscript/Grocery Price Per Unit.user.js', 'utf8');
 const browser = await webkit.launch({ headless: true });
-const page = await browser.newPage({ viewport: { width: 1440, height: 1000 }, locale: 'en-CA' });
-const consoleErrors = [];
-page.on('console', (message) => { if (message.type() === 'error') consoleErrors.push(message.text()); });
-page.on('pageerror', (error) => consoleErrors.push(`pageerror: ${error.message}`));
-const response = await page.goto(site, { waitUntil: 'domcontentloaded', timeout: 45_000 });
-await page.waitForTimeout(8000);
-await fs.mkdir('artifacts/screenshots', { recursive: true });
-await page.screenshot({ path: `artifacts/screenshots/${label}.png`, fullPage: true });
-const report = await page.evaluate(() => {
-  const links = [...document.querySelectorAll('a[href*="/product/"], a[href*="/p/"]')];
-  const uniqueLinks = [...new Set(links.map((link) => link.href))];
-  const samples = uniqueLinks.slice(0, 5).map((href) => {
-    const link = links.find((item) => item.href === href);
-    let node = link;
-    for (let i = 0; i < 6 && node?.parentElement; i += 1) {
-      if ((node.innerText || '').match(/\$\s*\d/)) break;
-      node = node.parentElement;
-    }
-    return { href, tag: node?.tagName, attrs: node ? Object.fromEntries([...node.attributes].map((a) => [a.name, a.value])) : {}, text: node?.innerText?.slice(0, 1000) };
-  });
-  const semantic = [...document.querySelectorAll('[data-testid], [data-test], [role="list"], [role="listitem"], main')]
-    .slice(0, 100).map((el) => ({ tag: el.tagName, testid: el.getAttribute('data-testid'), role: el.getAttribute('role'), text: el.innerText?.slice(0, 120) }));
-  const cardAncestry = [...document.querySelectorAll('[data-testid="product-title"]')].slice(0, 3).map((title) => {
-    const chain = [];
-    let node = title;
-    for (let i = 0; i < 7 && node; i += 1, node = node.parentElement) chain.push({ tag: node.tagName, testid: node.getAttribute('data-testid'), role: node.getAttribute('role'), cls: node.className, childCount: node.children.length });
-    return chain;
-  });
-  return { title: document.title, url: location.href, bodyText: document.body.innerText.slice(0, 3000), productLinkCount: uniqueLinks.length, samples, cardAncestry, semantic };
-});
-console.info(JSON.stringify({ status: response?.status(), ...report, consoleErrors: consoleErrors.slice(0, 20) }, null, 2));
-await browser.close();
+try {
+  const page = await browser.newPage({ viewport: { width: 1440, height: 1000 }, locale: 'en-CA' });
+  const errors = [];
+  page.on('pageerror', (error) => errors.push(String(error.message).slice(0, 240)));
+  await page.addInitScript({ content: userscript });
+  const response = await page.goto(target.href, { waitUntil: 'domcontentloaded', timeout: 45_000 });
+  await page.waitForTimeout(6000);
+  await fs.mkdir('artifacts/screenshots', { recursive: true });
+  await page.screenshot({ path: `artifacts/screenshots/live-inspect-${label}.png`, fullPage: false });
+  const report = await page.evaluate(() => ({
+    page: `${location.origin}${location.pathname}`,
+    controls: document.querySelectorAll('#lups-control').length,
+    productTitles: document.querySelectorAll('[data-testid="product-title"],[data-item-id]').length,
+    annotations: document.querySelectorAll('[data-lups-annotation],.price-per-unit-info').length,
+    status: document.querySelector('#lups-status')?.textContent || null,
+    dataState: document.querySelector('#lups-control')?.dataset.lupsDataState || null,
+    obstructed: document.querySelector('#lups-control')?.dataset.lupsObstructed || null
+  }));
+  console.info(JSON.stringify({ httpStatus: response?.status(), ...report, errors: errors.slice(0, 20) }, null, 2));
+} finally {
+  await browser.close();
+}

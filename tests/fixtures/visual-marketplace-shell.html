@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Generic marketplace visual fixture</title>
+  <style>
+    :root{color:#17211c;background:#f5f7f5;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+    *{box-sizing:border-box}body{margin:0;background:#f5f7f5;color:#17211c}
+    button,input{font:inherit}.market-header{position:relative;z-index:1;border-bottom:1px solid #dfe6e1;background:#fff}
+    .market-header__top{display:flex;max-width:1240px;min-height:70px;margin:auto;align-items:center;gap:20px;padding:12px 24px}
+    .market-brand{display:flex;align-items:center;gap:10px;color:#155f45;font-size:20px;font-weight:800;letter-spacing:-.02em;white-space:nowrap}
+    .market-brand__mark{display:grid;width:34px;height:34px;place-items:center;border-radius:11px;background:#dff2e6;color:#197454;font-size:18px}
+    .market-search{display:flex;min-width:0;max-width:650px;height:44px;flex:1;align-items:center;gap:9px;padding:0 14px;border:1px solid #c9d7cf;border-radius:999px;background:#f8faf8;color:#617168}
+    .market-search input{min-width:0;flex:1;border:0;outline:0;background:transparent;color:#26382f}
+    .market-header__actions{display:flex;gap:8px}.market-header__actions button{height:40px;padding:0 13px;border:1px solid #d5dfd9;border-radius:10px;background:#fff;color:#30473d;font-weight:650}
+    .market-nav{max-width:1240px;margin:auto;padding:0 24px 11px;color:#53665d;font-size:13px;font-weight:600}.market-nav span+span{margin-left:22px}
+    .market-page{max-width:1240px;margin:0 auto;padding:26px 24px 80px}.market-crumb{margin-bottom:12px;color:#6a7a72;font-size:12px}
+    .market-heading{display:flex;align-items:flex-end;justify-content:space-between;gap:18px;margin-bottom:22px}.market-heading h1{margin:0;font-size:29px;letter-spacing:-.03em}.market-heading p{margin:5px 0 0;color:#65766d;font-size:14px}
+    #toolbar{display:flex;align-items:center}.native-sort{position:relative}.native-sort>label{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)}
+    .native-sort__button{display:flex;min-width:142px;height:44px;align-items:center;justify-content:space-between;gap:16px;padding:0 13px;border:1px solid #cbd8d0;border-radius:10px;background:#fff;color:#26382f;font-weight:650;box-shadow:0 1px 2px #17211c0a}
+    .native-sort__button span{display:flex;width:100%;align-items:center;justify-content:space-between}.native-sort__host{display:none}
+    .market-layout{display:grid;grid-template-columns:210px minmax(0,1fr);gap:24px}.market-filters{align-self:start;padding:18px;border:1px solid #dfe6e1;border-radius:14px;background:#fff}
+    .market-filters h2{margin:0 0 14px;font-size:14px}.filter-group{padding:14px 0;border-top:1px solid #edf1ee}.filter-group strong{font-size:13px}.filter-group label{display:flex;align-items:center;gap:8px;margin-top:10px;color:#53665d;font-size:12px}
+    #grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;align-items:stretch}
+    .market-card{display:flex;min-width:0;min-height:320px;flex-direction:column;padding:12px;border:1px solid #dfe6e1;border-radius:14px;background:#fff;box-shadow:0 1px 2px #17211c08;overflow:hidden}
+    .product-visual{display:grid;height:112px;place-items:center;margin-bottom:12px;border-radius:11px;background:linear-gradient(135deg,#edf4ef,#f8faf8);color:#7a9989;font-size:32px;font-weight:800;letter-spacing:-.05em}
+    .product-eyebrow{margin:0 0 5px;color:#687970;font-size:10px;font-weight:750;letter-spacing:.07em;text-transform:uppercase}
+    [data-testid="product-title"]{min-height:38px;margin:0 0 8px;font-size:14px;line-height:1.35}
+    [data-testid="product-package-size"]{min-height:31px;margin:0 0 8px;color:#617168;font-size:12px;line-height:1.3}
+    [data-testid="price-product-tile"]{display:flex;min-height:25px;align-items:baseline;gap:7px;margin-top:auto;color:#15281f;font-size:18px;font-weight:800}
+    [data-testid="regular-price"]{font-size:18px}[data-testid="sale-price"]{color:#b23b2d}[data-testid="sale-price"]+[data-testid="regular-price"]{color:#7b8781;font-size:12px;font-weight:550;text-decoration:line-through}
+    .product-link{display:inline-block;margin-top:8px;color:#1769aa;font-size:12px;font-weight:650;text-decoration:none}.product-link:after{content:"  →"}
+    .market-card>button{min-height:36px;margin-top:9px;border:1px solid #b7cbbf;border-radius:9px;background:#eff7f1;color:#155f45;font-size:12px;font-weight:750}
+    @media(max-width:1040px){#grid{grid-template-columns:repeat(3,minmax(0,1fr))}.market-layout{grid-template-columns:180px minmax(0,1fr)}}
+    @media(max-width:760px){.market-header__top{padding:10px 14px}.market-brand span:last-child,.market-header__actions,.market-nav{display:none}.market-page{padding:18px 12px 76px}.market-heading{align-items:flex-start;flex-direction:column}.market-heading h1{font-size:23px}.market-layout{display:block}.market-filters{display:none}#grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.market-card{min-height:286px;padding:10px}.product-visual{height:88px}[data-testid="product-title"]{font-size:13px}}
+    @media(max-width:430px){.market-header__top{gap:10px}.market-brand__mark{width:32px;height:32px}.market-search{height:40px;padding:0 11px}.market-heading{margin-bottom:16px}#toolbar{width:100%}.native-sort,.native-sort__button{width:100%}#grid{gap:8px}.market-card{min-height:280px;border-radius:12px}.product-visual{height:80px;font-size:27px}}
+  </style>
+</head>
+<body>
+  <header class="market-header">
+    <div class="market-header__top">
+      <div class="market-brand"><span class="market-brand__mark" aria-hidden="true">◇</span><span>Fresh Basket</span></div>
+      <label class="market-search"><span aria-hidden="true">⌕</span><input value="milk and pantry" aria-label="Search products"></label>
+      <div class="market-header__actions"><button type="button">Weekly offers</button><button type="button">Cart · 0</button></div>
+    </div>
+    <nav class="market-nav" aria-label="Departments"><span>Produce</span><span>Pantry</span><span>Dairy</span><span>Household</span></nav>
+  </header>
+  <main class="market-page" data-testid="iceberg-layout-main">
+    <div class="market-crumb">Home / Search results</div>
+    <div class="market-heading">
+      <div><h1>Everyday groceries</h1><p>8 products in this visual stress fixture</p></div>
+      <div id="toolbar">
+        <section><div class="native-sort">
+          <label id="sort-by" data-testid="sort-label"><p>Sort</p></label>
+          <button class="native-sort__button" data-testid="menu-button" aria-labelledby="sort-by native-sort-text" aria-expanded="false" aria-haspopup="menu"><span><span id="native-sort-text">Relevance</span><span aria-hidden="true">⌄</span></span></button>
+          <div class="native-sort__host"><div data-testid="menu-list" aria-label="Sort" role="menu"><button type="button" data-testid="menu-item" role="menuitem"><span>Relevance</span><span data-testid="menu-tick-icon">✓</span></button></div></div>
+        </div></section>
+      </div>
+    </div>
+    <div class="market-layout" data-testid="listing-page-container">
+      <aside class="market-filters"><h2>Filter results</h2><div class="filter-group"><strong>Department</strong><label><input type="checkbox"> Pantry</label><label><input type="checkbox"> Dairy</label></div><div class="filter-group"><strong>Shopping preferences</strong><label><input type="checkbox"> On sale</label><label><input type="checkbox"> In stock</label></div></aside>
+      <div id="grid" data-testid="product-grid-component">
+        <article class="market-card" data-fixture-id="mass-explicit"><div class="product-visual" aria-hidden="true">F</div><p class="product-eyebrow">Pantry</p><h3 data-testid="product-title">Stone-ground flour</h3><p data-testid="product-package-size">1 kg, $0.60/100g</p><div data-testid="price-product-tile"><span data-testid="regular-price">$5.96</span></div><a class="product-link" href="/product/flour">View flour</a><button type="button">Add</button></article>
+        <article class="market-card" data-fixture-id="volume-explicit"><div class="product-visual" aria-hidden="true">M</div><p class="product-eyebrow">Dairy</p><h3 data-testid="product-title">Fresh milk</h3><p data-testid="product-package-size">4 L, $0.16/100ml</p><div data-testid="price-product-tile"><span data-testid="regular-price">$6.44</span></div><a class="product-link" href="/product/milk">View milk</a><button type="button">Add</button></article>
+        <article class="market-card" data-fixture-id="mass-sale"><div class="product-visual" aria-hidden="true">R</div><p class="product-eyebrow">Pantry</p><h3 data-testid="product-title">Long-grain rice</h3><p data-testid="product-package-size">2 kg</p><div data-testid="price-product-tile"><span data-testid="sale-price">$4.00</span><span data-testid="regular-price">$5.00</span></div><a class="product-link" href="/product/rice">View rice</a><button type="button">Add</button></article>
+        <article class="market-card" data-fixture-id="weighted"><div class="product-visual" aria-hidden="true">C</div><p class="product-eyebrow">Meat</p><h3 data-testid="product-title">Fresh chicken</h3><p data-testid="product-package-size">approximately 800 g, $10.88/1lb</p><div data-testid="price-product-tile"><span data-testid="regular-price">approximately $12.00</span></div><a class="product-link" href="/product/chicken">View chicken</a><button type="button">Add</button></article>
+        <article class="market-card" data-fixture-id="count"><div class="product-visual" aria-hidden="true">E</div><p class="product-eyebrow">Dairy</p><h3 data-testid="product-title">Large eggs</h3><p data-testid="product-package-size">12 count</p><div data-testid="price-product-tile"><span data-testid="regular-price">$6.00</span></div><a class="product-link" href="/product/eggs">View eggs</a><button type="button">Add</button></article>
+        <article class="market-card" data-fixture-id="multipack"><div class="product-visual" aria-hidden="true">6×</div><p class="product-eyebrow">Drinks</p><h3 data-testid="product-title">Sparkling cans</h3><p data-testid="product-package-size">6 x 355 mL</p><div data-testid="price-product-tile"><span data-testid="regular-price">$12.00</span></div><a class="product-link" href="/product/cans">View cans</a><button type="button">Add</button></article>
+        <article class="market-card" data-fixture-id="multibuy"><div class="product-visual" aria-hidden="true">2×</div><p class="product-eyebrow">Special</p><h3 data-testid="product-title">Conditional offer</h3><p data-testid="product-package-size">1 ea</p><div data-testid="price-product-tile">2 for $5.00</div><a class="product-link" href="/product/conditional">View offer</a><button type="button">Add</button></article>
+        <article class="market-card" data-fixture-id="unknown"><div class="product-visual" aria-hidden="true">?</div><p class="product-eyebrow">Seasonal</p><h3 data-testid="product-title">Mystery family size</h3><p data-testid="product-package-size">family size</p><div data-testid="price-product-tile"><span data-testid="regular-price">$8.00</span></div><a class="product-link" href="/product/mystery">View item</a><button type="button">Add</button></article>
+      </div>
+    </div>
+  </main>
+</body>
+</html>

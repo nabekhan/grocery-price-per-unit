@@ -14,6 +14,9 @@ describe('explicit unit prices', () => {
   });
   it('rejects ambiguous fluid ounces', () => expect(parseExplicitUnitPrice('$1.00/fl oz').source).toBe('ambiguous'));
   it('returns null for malformed values', () => expect(parseExplicitUnitPrice('$wat/100g')).toBeNull());
+  it.each(['$1.00/0 g', '$0.50/1,000 g'])('rejects unsafe explicit denominator %s', (raw) => {
+    expect(parseExplicitUnitPrice(raw)).toBeNull();
+  });
 });
 
 describe('package quantities', () => {
@@ -32,6 +35,18 @@ describe('package quantities', () => {
     expect(parsePackageQuantity('family size')).toBeNull();
     expect(parsePackageQuantity('?? g')).toBeNull();
   });
+  it.each(['1e-7 g', '1e+308 g', '-500 g', '+500 g', '−500 g', '1/2 kg', 'abc500 g', 'é500 g', '1,000 g'])('rejects unsafe numeric token %s', (raw) => {
+    expect(parsePackageQuantity(raw)).toBeNull();
+  });
+  it.each(['0 g', '0 x 500 g', '2 x 0 g', `${'9'.repeat(200)} x 2 g`])('rejects non-positive or overflowing quantity %s', (raw) => {
+    expect(parsePackageQuantity(raw)).toBeNull();
+  });
+  it('preserves a bounded decimal-comma quantity', () => {
+    expect(parsePackageQuantity('1,49 kg')).toMatchObject({ dimension: 'mass', baseQuantity: 1.49 });
+  });
+  it.each(['1 500 g', `1\u00a0500 g`, `1\u202f500 g`])('rejects ambiguous grouped-space quantity %s', (raw) => {
+    expect(parsePackageQuantity(raw)).toBeNull();
+  });
 });
 
 describe('product precedence and promotions', () => {
@@ -49,5 +64,23 @@ describe('product precedence and promotions', () => {
     expect(value.source).toBe('ambiguous');
   });
   it('does not invent a value without quantity', () => expect(parseProduct({ currentPrice: 4, rawPackageText: 'family size' }).source).toBe('unknown'));
+  it('does not turn malformed numeric suffixes into sortable unit prices', () => {
+    const value = parseProduct({ currentPrice: 7, rawPackageText: '1e-7 g' });
+    expect(value.source).toBe('unknown');
+    expect(value.normalizedUnitPrice).toBeNull();
+  });
+  it('rejects non-finite and negative caller prices', () => {
+    expect(parseProduct({ currentPrice: Infinity, rawPackageText: '1 kg' }).normalizedUnitPrice).toBeNull();
+    expect(parseProduct({ currentPrice: -1, rawPackageText: '1 kg' }).normalizedUnitPrice).toBeNull();
+  });
+  it.each(['$1e3', '$1abc', '$1é'])('rejects malformed money token %s', (raw) => {
+    expect(parseProduct({ currentPriceText: raw, rawPackageText: '1 kg' })).toMatchObject({
+      source: 'unknown', normalizedUnitPrice: null
+    });
+  });
+  it('does not rank zero-price package calculations as certain value', () => {
+    expect(parseProduct({ currentPrice: 0, rawPackageText: '1 kg' })).toMatchObject({
+      source: 'unknown', normalizedUnitPrice: null
+    });
+  });
 });
-

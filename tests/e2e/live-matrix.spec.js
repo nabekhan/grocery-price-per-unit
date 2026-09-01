@@ -1,8 +1,7 @@
 import { expect, test } from '@playwright/test';
 import fs from 'node:fs/promises';
 
-const captureScript = await fs.readFile('dist/extension/api-capture-main.js', 'utf8');
-const contentScript = await fs.readFile('dist/extension/content.js', 'utf8');
+const userscript = await fs.readFile('dist/userscript/Grocery Price Per Unit.user.js', 'utf8');
 const cases = [
   ['rss', 'https://www.realcanadiansuperstore.ca', 'all purpose flour'],
   ['rss', 'https://www.realcanadiansuperstore.ca', 'sugar'],
@@ -28,6 +27,7 @@ const cases = [
 test('representative ingredient and household matrix', async ({ page }) => {
   test.setTimeout(240_000);
   test.skip(process.env.LIVE_SITE !== '1', 'Set LIVE_SITE=1 to contact live storefronts.');
+  await page.addInitScript({ content: userscript });
   const results = [];
   for (const [banner, base, query] of cases) {
     const pageErrors = [];
@@ -42,8 +42,6 @@ test('representative ingredient and household matrix', async ({ page }) => {
       continue;
     }
     const baseline = pageErrors.length;
-      await page.addScriptTag({ content: captureScript });
-      await page.addScriptTag({ content: contentScript });
     await expect(page.locator('#lups-control')).toHaveCount(1);
     await page.locator('#lups-mode').selectOption('total-asc', { force: true });
     await page.locator('#lups-mode').selectOption('auto-asc', { force: true });
@@ -52,6 +50,7 @@ test('representative ingredient and household matrix', async ({ page }) => {
     const after = await page.locator('[data-testid="product-title"]').count();
     const annotations = await page.locator('[data-lups-annotation]').count();
     expect(after).toBe(before);
+    expect(annotations).toBeGreaterThan(0);
     expect(pageErrors.slice(baseline)).toEqual([]);
     results.push({ banner, query, status: response?.status(), outcome: 'pass', products: before, annotations, sortStatus: status });
     page.off('pageerror', listener);

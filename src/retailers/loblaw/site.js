@@ -1,36 +1,48 @@
 import { parseProduct } from '../../parsing/parser.js';
+import { MAX_RENDERED_CARDS } from '../limits.js';
 
-function directChildUnder(node, container) {
-  let child = node;
-  while (child?.parentElement && child.parentElement !== container) child = child.parentElement;
-  return child?.parentElement === container ? child : null;
-}
+/*!
+ * Loblaw DOM boundary. A selected result grid must contain genuine product
+ * title/link cards and remain under the shared work cap. API IDs come from
+ * stable product links; card text is display context, never price authority.
+ */
 
 export function findProductGrid(document) {
   const listing = document.querySelector('[data-testid="listing-page-container"]');
-  const semanticGrids = listing
-    ? [...listing.querySelectorAll('[data-testid="product-grid-component"]')]
-    : [];
+  const semanticGridNodes = listing?.querySelectorAll('[data-testid="product-grid-component"]');
+  if (semanticGridNodes?.length > MAX_RENDERED_CARDS) return null;
+  const semanticGrids = semanticGridNodes ? [...semanticGridNodes] : [];
   if (semanticGrids.length) {
-    const cards = semanticGrids.flatMap((grid) => [...grid.querySelectorAll(':scope > *')]
-      .filter((child) => child.querySelector('[data-testid="product-title"]')));
+    const cards = [];
+    let inspectedChildren = 0;
+    for (const grid of semanticGrids) {
+      if (inspectedChildren + grid.children.length > MAX_RENDERED_CARDS) return null;
+      inspectedChildren += grid.children.length;
+      for (const child of grid.children) {
+        if (child.querySelector('[data-testid="product-title"]')) cards.push(child);
+      }
+    }
     if (cards.length >= 3) return [semanticGrids.find((grid) => grid.children.length) || semanticGrids[0], cards, semanticGrids];
   }
-  const titles = [...document.querySelectorAll('[data-testid="product-title"]')];
+  const titleNodes = document.querySelectorAll('[data-testid="product-title"]');
+  if (titleNodes.length > MAX_RENDERED_CARDS) return null;
   const candidates = new Map();
-  for (const title of titles) {
+  for (const title of titleNodes) {
+    let branch = title;
     let ancestor = title.parentElement;
-    while (ancestor && ancestor !== document.body) {
-      const count = ancestor.querySelectorAll('[data-testid="product-title"]').length;
-      if (count >= 3) {
-        const cards = [...new Set(titles.map((item) => directChildUnder(item, ancestor)).filter(Boolean))];
-        if (cards.length >= 3) candidates.set(ancestor, cards);
-        break;
-      }
+    let depth = 0;
+    while (ancestor && ancestor !== document.body && depth < 24) {
+      if (!candidates.has(ancestor)) candidates.set(ancestor, new Set());
+      candidates.get(ancestor).add(branch);
+      branch = ancestor;
       ancestor = ancestor.parentElement;
+      depth += 1;
     }
   }
-  return [...candidates.entries()].sort((a, b) => b[1].length - a[1].length)[0] || null;
+  const match = [...candidates.entries()]
+    .filter(([, cards]) => cards.size >= 3)
+    .sort((left, right) => right[1].size - left[1].size)[0];
+  return match ? [match[0], [...match[1]]] : null;
 }
 
 function productId(card, index) {
