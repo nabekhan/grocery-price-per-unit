@@ -7,6 +7,7 @@ import { defineRetailerPlugin, installRetailerPlugin } from '../../runtime/retai
 import { installWalmartCapture } from './api-capture-main.js';
 import { getWalmartScope, installWalmartAnnotator } from './content.js';
 import { installWalmartSorter } from './sort-main.js';
+import { installWalmartShoppingList } from './shopping-list.js';
 import { isWalmartSearchPage } from './routes.js';
 
 const plugin = defineRetailerPlugin({
@@ -18,7 +19,8 @@ const plugin = defineRetailerPlugin({
   installRuntime: (_global, context) => {
     const annotatorInstalled = installWalmartAnnotator(context);
     const sorterInstalled = installWalmartSorter(context);
-    return annotatorInstalled !== false || sorterInstalled !== false;
+    const shoppingInstalled = installWalmartShoppingList();
+    return annotatorInstalled !== false || sorterInstalled !== false || shoppingInstalled !== false;
   }
 });
 

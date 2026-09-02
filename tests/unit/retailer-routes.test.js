@@ -11,7 +11,6 @@ describe('retailer-owned search-page selectors', () => {
     ['https://www.realcanadiansuperstore.ca/search?search-bar=milk', isLoblawSearchPage],
     ['https://www.nofrills.ca/legacy-results?search-bar=eggs', isLoblawSearchPage],
     ['https://www.walmart.ca/en/search?', isWalmartSearchPage],
-    ['https://www.walmart.ca/legacy-results?q=milk', isWalmartSearchPage],
     ['https://www.saveonfoods.com/sm/pickup/rsid/6647/results?', isSaveOnSearchPage],
     ['https://www.saveonfoods.com/sm/delivery/rsid/1234/results?q=eggs', isSaveOnSearchPage],
     ['https://www.saveonfoods.com/legacy-results?q=milk', isSaveOnSearchPage]
@@ -24,6 +23,7 @@ describe('retailer-owned search-page selectors', () => {
     ['https://www.realcanadiansuperstore.ca/en/product/milk/123', isLoblawSearchPage],
     ['https://www.walmart.ca/en/grocery', isWalmartSearchPage],
     ['https://www.walmart.ca/en/ip/milk/600000000001', isWalmartSearchPage],
+    ['https://www.walmart.ca/en/ip/milk/600000000001?q=milk', isWalmartSearchPage],
     ['https://www.saveonfoods.com/sm/pickup/rsid/6647/categories/dairy', isSaveOnSearchPage],
     ['https://www.saveonfoods.com/sm/pickup/rsid/6647/product/milk/123', isSaveOnSearchPage]
   ])('rejects non-search route %s', (value, selector) => {

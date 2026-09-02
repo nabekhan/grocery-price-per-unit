@@ -305,14 +305,14 @@ test('userscript still starts when Safari origin storage is unavailable', async 
       });
     }
   });
-  await page.route('https://www.walmart.ca/storage-fixture*', (route) => route.fulfill({
+  await page.route('https://www.walmart.ca/storage-fixture/**', (route) => route.fulfill({
     body: `<!doctype html><style>.wrapper,.card{width:120px;height:60px}</style><div id="grid">
       <div class="wrapper"><div class="card" data-item-id="one" data-ppu-sort-dimension="mass" data-ppu-sort-value="1" data-ppu-total-price="2"></div></div>
       <div class="wrapper"><div class="card" data-item-id="two" data-ppu-sort-dimension="mass" data-ppu-sort-value="2" data-ppu-total-price="3"></div></div>
     </div>`,
     contentType: 'text/html'
   }));
-  await page.goto('https://www.walmart.ca/storage-fixture?q=milk');
+  await page.goto('https://www.walmart.ca/storage-fixture/search?q=milk');
   await page.addScriptTag({ content: userscript });
 
   await expect(page.locator('#lups-control')).toHaveCount(1);
@@ -353,7 +353,7 @@ test('userscript keeps the newer in-memory preference after a partial storage fa
 test('Walmart userscript starts its sorter without an extension runtime', async ({ page }) => {
   const pageErrors = [];
   page.on('pageerror', (error) => pageErrors.push(error.message));
-  await page.route('https://www.walmart.ca/test-fixture*', (route) => route.fulfill({
+  await page.route('https://www.walmart.ca/test-fixture/**', (route) => route.fulfill({
     body: `<!doctype html><html><head><style>
       #grid{display:flex;flex-wrap:wrap}.wrapper{width:140px;height:80px}.card{width:130px;height:70px}
     </style></head><body>
@@ -367,7 +367,7 @@ test('Walmart userscript starts its sorter without an extension runtime', async 
     </body></html>`,
     contentType: 'text/html'
   }));
-  await page.goto('https://www.walmart.ca/test-fixture?q=milk');
+  await page.goto('https://www.walmart.ca/test-fixture/search?q=milk');
   await page.addScriptTag({ content: userscript });
 
   await expect(page.locator('#lups-control')).toHaveCount(1);
@@ -398,7 +398,7 @@ test('Walmart userscript starts at document-start and carries captured API data 
       }
     })
   }));
-  await page.route('https://www.walmart.ca/document-start-fixture*', (route) => route.fulfill({
+  await page.route('https://www.walmart.ca/document-start-fixture/**', (route) => route.fulfill({
     contentType: 'text/html',
     body: `<!doctype html><html><head><style>
       #grid{display:flex}.wrapper,.card{width:140px;min-height:90px}.media{height:20px}.media img{width:20px;height:20px}
@@ -410,7 +410,7 @@ test('Walmart userscript starts at document-start and carries captured API data 
     </script></body></html>`
   }));
 
-  await page.goto('https://www.walmart.ca/document-start-fixture?q=flour');
+  await page.goto('https://www.walmart.ca/document-start-fixture/search?q=flour');
   await expect(page.locator('#lups-control')).toHaveCount(1);
   await expect(page.locator('[data-item-id="mass-one"]')).toHaveAttribute('data-ppu-data-source', 'api');
   await expect(page.locator('[data-item-id="mass-one"] .price-per-unit-info')).toHaveText('$1.00/kg');
@@ -505,6 +505,52 @@ test('Walmart userscript starts at document-start and carries captured API data 
   expect(pageErrors).toEqual([]);
 });
 
+test('Walmart cart builder previews, explicitly adds, resumes, and verifies the exact cheapest product', async ({ page }) => {
+  const pageErrors = [];
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+  await page.addInitScript({ content: userscript });
+  await page.route('https://www.walmart.ca/orchestra/snb/graphql/search*', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify({ data: { search: { itemStacks: [{ itemsV2: [
+      { id: 'expensive-bananas', name: 'Large bananas 1 kg', priceInfo: { currentPrice: { price: 4 } } },
+      { id: 'cheap-bananas', name: 'Value bananas 1 kg', priceInfo: { currentPrice: { price: 2 } } }
+    ] }] } } })
+  }));
+  await page.route('https://www.walmart.ca/shopping-list-fixture/**', (route) => route.fulfill({
+    contentType: 'text/html',
+    body: `<!doctype html><style>#grid{display:flex}.wrapper,.card{width:180px;min-height:110px}</style>
+      <div id="grid">
+        <div class="wrapper"><article class="card" data-item-id="expensive-bananas"><button>Add large bananas</button></article></div>
+        <div class="wrapper"><article class="card" data-item-id="cheap-bananas"><button onclick="this.textContent='Added';this.setAttribute('aria-label','Quantity increase')">Add value bananas</button></article></div>
+      </div><script>fetch('/orchestra/snb/graphql/search?variables=' + encodeURIComponent(JSON.stringify({query:'bananas',page:1})))</script>`
+  }));
+  await page.route('https://www.walmart.ca/en/cart', (route) => route.fulfill({
+    contentType: 'text/html',
+    body: '<!doctype html><main data-testid="cart-item"><a href="/en/ip/value-bananas/cheap-bananas">Value bananas</a></main>'
+  }));
+
+  await page.goto('https://www.walmart.ca/shopping-list-fixture/search?q=bananas');
+  await page.locator('#gppu-shopping-toggle').click();
+  await page.locator('#gppu-shopping-input').fill('bananas');
+  await page.getByRole('button', { name: 'Preview cheapest choices' }).click();
+
+  await expect(page.locator('#gppu-shopping-status')).toContainText('Preview complete', { timeout: 8_000 });
+  await expect(page.locator('#gppu-shopping-results')).toContainText('Value bananas 1 kg · $2.00');
+  await expect(page.locator('[aria-label="Quantity increase"]')).toHaveCount(0);
+  await fs.mkdir(path.join(root, 'artifacts/screenshots/shopping-list'), { recursive: true });
+  await page.screenshot({
+    path: path.join(root, 'artifacts/screenshots/shopping-list/walmart-preview.png'),
+    fullPage: false
+  });
+  await page.getByRole('button', { name: 'Add planned items' }).click();
+
+  await expect(page).toHaveURL('https://www.walmart.ca/en/cart');
+  await expect(page.locator('#gppu-shopping-status')).toContainText('All planned Add actions completed', { timeout: 8_000 });
+  await expect(page.locator('#gppu-shopping-results')).toContainText('bananas — added');
+  await expect(page.locator('a[href*="cheap-bananas"]')).toHaveCount(1);
+  expect(pageErrors).toEqual([]);
+});
+
 test('Walmart never ranks zero API prices and removes stale zero-derived annotations', async ({ page }) => {
   const pageErrors = [];
   let responses = 0;
@@ -530,7 +576,7 @@ test('Walmart never ranks zero API prices and removes stale zero-derived annotat
       ] }] } } })
     });
   });
-  await page.route('https://www.walmart.ca/zero-price-fixture*', (route) => route.fulfill({
+  await page.route('https://www.walmart.ca/zero-price-fixture/**', (route) => route.fulfill({
     contentType: 'text/html',
     body: `<!doctype html><style>#grid{display:flex}.wrapper,.card{width:140px;height:90px}</style>
       <div id="grid">
@@ -539,7 +585,7 @@ test('Walmart never ranks zero API prices and removes stale zero-derived annotat
       </div><script>window.initialProducts = fetch('/orchestra/snb/graphql/search?variables=' + encodeURIComponent(JSON.stringify({query:'rice',page:1})));</script>`
   }));
 
-  await page.goto('https://www.walmart.ca/zero-price-fixture?q=rice');
+  await page.goto('https://www.walmart.ca/zero-price-fixture/search?q=rice');
   await expect(page.locator('[data-item-id="zero-calculated"] [data-lups-annotation]')).toHaveText('$4.00/kg');
   await expect(page.locator('[data-item-id="zero-explicit"] [data-lups-annotation]')).toHaveText('$5.00/kg');
 
@@ -564,7 +610,7 @@ test('Walmart clears and rebuilds state when a recycled card loses its product i
       { id: 'replacement', name: 'Replacement rice 1 kg', priceInfo: { currentPrice: { price: 1 } } }
     ] }] } } })
   }));
-  await page.route('https://www.walmart.ca/recycled-identity-fixture*', (route) => route.fulfill({
+  await page.route('https://www.walmart.ca/recycled-identity-fixture/**', (route) => route.fulfill({
     contentType: 'text/html',
     body: `<!doctype html><style>#grid{display:flex}.wrapper,.card{width:140px;height:100px}</style>
       <div id="grid">
@@ -574,7 +620,7 @@ test('Walmart clears and rebuilds state when a recycled card loses its product i
       </div><script>fetch('/orchestra/snb/graphql/search?variables=' + encodeURIComponent(JSON.stringify({query:'rice',page:1})))</script>`
   }));
 
-  await page.goto('https://www.walmart.ca/recycled-identity-fixture?q=rice');
+  await page.goto('https://www.walmart.ca/recycled-identity-fixture/search?q=rice');
   const recycled = page.locator('[data-name="recycled"] .card');
   await expect(recycled.locator('.price-per-unit-info')).toHaveText('$6.00/kg');
   await choose(page, 'auto-asc');
@@ -608,7 +654,7 @@ test('Walmart clears and rebuilds state when a recycled card loses its product i
 test('Walmart reads message schema once and commits batch updates transactionally', async ({ page }) => {
   const pageErrors = [];
   page.on('pageerror', (error) => pageErrors.push(error.message));
-  await page.route('https://www.walmart.ca/transaction-fixture*', (route) => route.fulfill({
+  await page.route('https://www.walmart.ca/transaction-fixture/**', (route) => route.fulfill({
     contentType: 'text/html',
     body: `<!doctype html><style>#grid{display:flex}.wrapper,.card{width:140px;height:100px}</style><div id="grid">
       <div class="wrapper" data-name="a"><div class="card" data-item-id="a"></div></div>
@@ -616,12 +662,12 @@ test('Walmart reads message schema once and commits batch updates transactionall
       <div class="wrapper" data-name="c"><div class="card" data-item-id="c"></div></div>
     </div>`
   }));
-  await page.goto('https://www.walmart.ca/transaction-fixture?q=rice');
+  await page.goto('https://www.walmart.ca/transaction-fixture/search?q=rice');
   await page.addScriptTag({ content: userscript });
   const context = {
     query: 'rice', page: 1, storeId: null,
-    pageUrlAtRequest: '/transaction-fixture?q=rice',
-    pageUrlAtCapture: '/transaction-fixture?q=rice'
+    pageUrlAtRequest: '/transaction-fixture/search?q=rice',
+    pageUrlAtCapture: '/transaction-fixture/search?q=rice'
   };
   const initialReads = await page.evaluate((context) => {
     let lengthReads = 0;
@@ -702,16 +748,16 @@ test('Walmart reads message schema once and commits batch updates transactionall
 test('Walmart rejects an extreme revision without freezing ordinary updates', async ({ page }) => {
   const pageErrors = [];
   page.on('pageerror', (error) => pageErrors.push(error.message));
-  await page.route('https://www.walmart.ca/revision-fixture*', (route) => route.fulfill({
+  await page.route('https://www.walmart.ca/revision-fixture/**', (route) => route.fulfill({
     contentType: 'text/html',
     body: '<!doctype html><div id="grid"><div class="wrapper"><div class="card" data-item-id="rice"></div></div></div>'
   }));
-  await page.goto('https://www.walmart.ca/revision-fixture?q=rice');
+  await page.goto('https://www.walmart.ca/revision-fixture/search?q=rice');
   await page.addScriptTag({ content: userscript });
   const context = {
     query: 'rice', page: 1, storeId: null,
-    pageUrlAtRequest: '/revision-fixture?q=rice',
-    pageUrlAtCapture: '/revision-fixture?q=rice'
+    pageUrlAtRequest: '/revision-fixture/search?q=rice',
+    pageUrlAtCapture: '/revision-fixture/search?q=rice'
   };
   const send = (revision, price) => page.evaluate(({ context: messageContext, revision: messageRevision, price: productPrice }) => window.postMessage({
     source: 'walmart-price-per-unit', version: 2, type: 'api-products', mode: 'snapshot',
@@ -734,7 +780,7 @@ test('Walmart rejects an extreme revision without freezing ordinary updates', as
 test('generated userscript claims one engine and preserves chosen order after reinjection', async ({ page }) => {
   const pageErrors = [];
   page.on('pageerror', (error) => pageErrors.push(error.message));
-  await page.route('https://www.walmart.ca/reinjection-fixture*', (route) => route.fulfill({
+  await page.route('https://www.walmart.ca/reinjection-fixture/**', (route) => route.fulfill({
     contentType: 'text/html',
     body: `<!doctype html><style>#grid{display:flex}.wrapper,.card{width:140px;height:90px}</style><div id="grid">
       <div class="wrapper" data-name="high"><div class="card" data-item-id="high"></div></div>
@@ -742,15 +788,15 @@ test('generated userscript claims one engine and preserves chosen order after re
       <div class="wrapper" data-name="eggs"><div class="card" data-item-id="eggs"></div></div>
     </div>`
   }));
-  await page.goto('https://www.walmart.ca/reinjection-fixture?q=rice');
+  await page.goto('https://www.walmart.ca/reinjection-fixture/search?q=rice');
   await page.addScriptTag({ content: userscript });
   await page.addScriptTag({ content: userscript });
   await expect(page.locator('#lups-control')).toHaveCount(1);
   expect(await page.evaluate(() => globalThis[Symbol.for('grocery-price-per-unit.userscript-install.v1')])).toBe(true);
   const context = {
     query: 'rice', page: 1, storeId: null,
-    pageUrlAtRequest: '/reinjection-fixture?q=rice',
-    pageUrlAtCapture: '/reinjection-fixture?q=rice'
+    pageUrlAtRequest: '/reinjection-fixture/search?q=rice',
+    pageUrlAtCapture: '/reinjection-fixture/search?q=rice'
   };
   await page.evaluate((messageContext) => window.postMessage({
     source: 'walmart-price-per-unit', version: 2, type: 'api-products', mode: 'snapshot', revision: 1,
@@ -785,10 +831,10 @@ test('generated userscript fails open and recovers from oversized rendered-card 
     `<div class="wrapper"><div class="card" data-item-id="item-${index}"></div></div>`).join('');
   const saveOnCards = Array.from({ length: cardCount }, (_, index) =>
     `<li class="wrapper"><article data-testid="ProductCardWrapper-item-${index}"></article></li>`).join('');
-  await page.route('https://www.walmart.ca/oversized-fixture*', (route) => route.fulfill({
+  await page.route('https://www.walmart.ca/oversized-fixture/**', (route) => route.fulfill({
     contentType: 'text/html', body: `<!doctype html><div id="grid">${walmartCards}</div>`
   }));
-  await page.goto('https://www.walmart.ca/oversized-fixture?q=rice');
+  await page.goto('https://www.walmart.ca/oversized-fixture/search?q=rice');
   await page.addScriptTag({ content: userscript });
   await page.waitForTimeout(300);
   await expect(page.locator('.price-per-unit-info')).toHaveCount(0);
@@ -812,7 +858,7 @@ test('generated userscript bounds non-product work inside otherwise small grids'
   page.on('pageerror', (error) => pageErrors.push(error.message));
   const ordinaryChildren = Array.from({ length: 1_001 }, (_, index) =>
     `<div class="ordinary" data-name="ordinary-${index}"></div>`).join('');
-  await page.route('https://www.walmart.ca/non-product-bound-fixture*', (route) => route.fulfill({
+  await page.route('https://www.walmart.ca/non-product-bound-fixture/**', (route) => route.fulfill({
     contentType: 'text/html',
     body: `<!doctype html><div id="grid">
       <div class="wrapper"><div data-item-id="one"></div></div>
@@ -820,7 +866,7 @@ test('generated userscript bounds non-product work inside otherwise small grids'
       ${ordinaryChildren}
     </div>`
   }));
-  await page.goto('https://www.walmart.ca/non-product-bound-fixture?q=rice');
+  await page.goto('https://www.walmart.ca/non-product-bound-fixture/search?q=rice');
   await page.evaluate(() => {
     const nativeQuerySelectorAll = Element.prototype.querySelectorAll;
     window.__gppuWrapperProductQueries = 0;
@@ -877,7 +923,7 @@ test('Walmart userscript avoids redundant scans after one API update', async ({ 
       { id: 'mass-new', name: 'Oats 1 kg', priceInfo: { currentPrice: { price: 3 } } }
     ] }] } } })
   }));
-  await page.route('https://www.walmart.ca/scan-budget-fixture*', (route) => route.fulfill({
+  await page.route('https://www.walmart.ca/scan-budget-fixture/**', (route) => route.fulfill({
     contentType: 'text/html',
     body: `<!doctype html><style>#grid{display:flex}.wrapper,.card{width:140px;height:90px}</style><div id="grid">
       <div class="wrapper"><div class="card" data-item-id="mass-two"><span data-automation-id="product-price">$4.00</span></div></div>
@@ -885,7 +931,7 @@ test('Walmart userscript avoids redundant scans after one API update', async ({ 
     </div>`
   }));
 
-  await page.goto('https://www.walmart.ca/scan-budget-fixture?q=flour');
+  await page.goto('https://www.walmart.ca/scan-budget-fixture/search?q=flour');
   await expect(page.locator('#lups-control')).toHaveCount(1);
   await page.waitForTimeout(350);
   await page.evaluate(() => { window.__gppuMeasurements.updates = 0; window.__gppuMeasurements.cardQueries = 0; });
@@ -944,7 +990,7 @@ test('Walmart userscript ignores an older response after results navigation', as
       body: JSON.stringify({ data: { search: { itemStacks: [{ itemsV2 }] } } })
     });
   });
-  await page.route('https://www.walmart.ca/stale-results-fixture*', (route) => route.fulfill({
+  await page.route('https://www.walmart.ca/stale-results-fixture/**', (route) => route.fulfill({
     contentType: 'text/html',
     body: `<!doctype html><html><head><style>
       #grid{display:flex}.wrapper,.card{width:140px;height:90px}
@@ -958,10 +1004,10 @@ test('Walmart userscript ignores an older response after results navigation', as
     </div></body></html>`
   }));
 
-  await page.goto('https://www.walmart.ca/stale-results-fixture?q=eggs');
+  await page.goto('https://www.walmart.ca/stale-results-fixture/search?q=eggs');
   await eggsRequested;
   await page.evaluate(async () => {
-    history.pushState({}, '', '/stale-results-fixture?q=milk');
+    history.pushState({}, '', '/stale-results-fixture/search?q=milk');
     document.querySelector('#grid').innerHTML = `
       <div class="wrapper" data-name="milk-low"><div class="card" data-item-id="milk-low"><span data-automation-id="product-price">$4.00</span></div></div>
       <div class="wrapper" data-name="milk-high"><div class="card" data-item-id="milk-high"><span data-automation-id="product-price">$3.00</span></div></div>
@@ -1006,7 +1052,7 @@ test('Walmart clears only authoritative empty base pages and recovers safely', a
       body: JSON.stringify({ data: { search: { itemStacks: [{ itemsV2 }] } } })
     });
   });
-  await page.route('https://www.walmart.ca/authoritative-empty-fixture*', (route) => route.fulfill({
+  await page.route('https://www.walmart.ca/authoritative-empty-fixture/**', (route) => route.fulfill({
     contentType: 'text/html',
     body: `<!doctype html><style>#grid{display:flex}.wrapper,.card{width:140px;height:90px}</style><div id="grid">
       <div class="wrapper"><div class="card" data-item-id="milk-one"></div></div>
@@ -1014,7 +1060,7 @@ test('Walmart clears only authoritative empty base pages and recovers safely', a
       <div class="wrapper"><div class="card" data-item-id="fresh-milk"></div></div>
     </div>`
   }));
-  await page.goto('https://www.walmart.ca/authoritative-empty-fixture?q=milk');
+  await page.goto('https://www.walmart.ca/authoritative-empty-fixture/search?q=milk');
   const request = (variables) => page.evaluate((value) => fetch('/orchestra/snb/graphql/search?variables=' + encodeURIComponent(JSON.stringify(value))), variables);
 
   await request({ query: 'milk', page: 1 });
@@ -1054,7 +1100,7 @@ test('Walmart rejects pagination requested before a refreshed same-query base pa
       body: JSON.stringify({ data: { search: { itemStacks: [{ itemsV2 }] } } })
     });
   });
-  await page.route('https://www.walmart.ca/pagination-race-fixture*', (route) => route.fulfill({
+  await page.route('https://www.walmart.ca/pagination-race-fixture/**', (route) => route.fulfill({
     contentType: 'text/html',
     body: `<!doctype html><style>#grid{display:flex}.wrapper,.card{width:140px;height:90px}</style><div id="grid">
       <div class="wrapper"><div class="card" data-item-id="old-base"></div></div>
@@ -1062,7 +1108,7 @@ test('Walmart rejects pagination requested before a refreshed same-query base pa
       <div class="wrapper"><div class="card" data-item-id="stale-page"></div></div>
     </div>`
   }));
-  await page.goto('https://www.walmart.ca/pagination-race-fixture?q=milk');
+  await page.goto('https://www.walmart.ca/pagination-race-fixture/search?q=milk');
   await page.evaluate(() => fetch('/orchestra/snb/graphql/search?variables=' + encodeURIComponent(JSON.stringify({ query: 'milk', page: 1 }))));
   await expect(page.locator('[data-item-id="old-base"] .price-per-unit-info')).toHaveCount(1);
 
@@ -1091,14 +1137,14 @@ test('Walmart clears same-query prices when the page/store context changes', asy
       ] }] } } })
     });
   });
-  await page.route('https://www.walmart.ca/store-scope-fixture*', (route) => route.fulfill({
+  await page.route('https://www.walmart.ca/store-scope-fixture/**', (route) => route.fulfill({
     contentType: 'text/html',
     body: `<!doctype html><style>#grid{display:flex}.wrapper,.card{width:140px;height:90px}</style><div id="grid">
       <div class="wrapper"><div class="card" data-item-id="scoped-milk"></div></div>
       <div class="wrapper"><div class="card" data-item-id="scoped-cream"></div></div>
     </div>`
   }));
-  await page.goto('https://www.walmart.ca/store-scope-fixture?q=milk&store=alpha');
+  await page.goto('https://www.walmart.ca/store-scope-fixture/search?q=milk&store=alpha');
   const annotation = page.locator('[data-item-id="scoped-milk"] .price-per-unit-info');
   await page.evaluate(() => fetch('/orchestra/snb/graphql/search?variables=' + encodeURIComponent(JSON.stringify({ query: 'milk', page: 1, store: 'alpha' }))));
   await expect(annotation).toHaveText('$4.00/L');
@@ -1106,7 +1152,7 @@ test('Walmart clears same-query prices when the page/store context changes', asy
   await expect(page.locator('#lups-control')).toHaveAttribute('data-lups-data-state', 'ready');
 
   await page.evaluate(() => {
-    history.pushState({}, '', '/store-scope-fixture?q=milk&store=beta');
+    history.pushState({}, '', '/store-scope-fixture/search?q=milk&store=beta');
   });
   await expect(annotation).toHaveCount(0);
   await expect(page.locator('[data-item-id="scoped-milk"]')).not.toHaveAttribute('data-ppu-data-source', 'api');
@@ -1131,7 +1177,7 @@ test('Walmart annotates a cached lazy card during continuous retailer DOM churn'
       { id: 'churn-lazy', name: 'Lazy Flour 1 kg', priceInfo: { currentPrice: { price: 1 } } }
     ] }] } } })
   }));
-  await page.route('https://www.walmart.ca/churn-fixture*', (route) => route.fulfill({
+  await page.route('https://www.walmart.ca/churn-fixture/**', (route) => route.fulfill({
     contentType: 'text/html',
     body: `<!doctype html><style>#grid{display:flex}.wrapper,.card{width:140px;height:90px}</style>
       <div id="retailer-churn"></div><div id="grid">
@@ -1139,7 +1185,7 @@ test('Walmart annotates a cached lazy card during continuous retailer DOM churn'
       </div><script>fetch('/orchestra/snb/graphql/search?variables=' + encodeURIComponent(JSON.stringify({query:'flour',page:1})));</script>`
   }));
 
-  await page.goto('https://www.walmart.ca/churn-fixture?q=flour');
+  await page.goto('https://www.walmart.ca/churn-fixture/search?q=flour');
   await expect(page.locator('[data-item-id="churn-base"] .price-per-unit-info')).toHaveText('$2.00/kg');
   await page.evaluate(() => {
     const churn = document.querySelector('#retailer-churn');
@@ -1435,7 +1481,7 @@ const lateInjectionFixtures = [
   },
   {
     name: 'Walmart',
-    url: 'https://www.walmart.ca/late-injection-fixture?q=milk&store=1',
+    url: 'https://www.walmart.ca/late-injection-fixture/search?q=milk&store=1',
     body: `<!doctype html><style>#grid{display:flex}.wrapper,.card{width:140px;height:80px}</style><div id="grid">
       <div class="wrapper"><div class="card" data-item-id="one"></div></div>
       <div class="wrapper"><div class="card" data-item-id="two"></div></div>
@@ -1565,7 +1611,7 @@ for (const fixturePage of nonSearchRouteFixtures) {
 }
 
 test('leaving a Walmart search route restores owned UI, order, and promotions', async ({ page }) => {
-  await page.route('https://www.walmart.ca/route-gate-fixture*', (route) => route.fulfill({
+  await page.route('https://www.walmart.ca/route-gate-fixture/**', (route) => route.fulfill({
     body: `<!doctype html><style>#grid{display:flex}.wrapper,.card{width:120px;height:80px}</style>
       <div id="grid">
         <div class="wrapper"><article class="card" data-item-id="high"></article></div>
@@ -1574,7 +1620,7 @@ test('leaving a Walmart search route restores owned UI, order, and promotions', 
       </div>`,
     contentType: 'text/html'
   }));
-  await page.goto('https://www.walmart.ca/route-gate-fixture?q=milk');
+  await page.goto('https://www.walmart.ca/route-gate-fixture/search?q=milk');
   await page.addScriptTag({ content: userscript });
 
   await expect(page.locator('#lups-control')).toHaveCount(1);
