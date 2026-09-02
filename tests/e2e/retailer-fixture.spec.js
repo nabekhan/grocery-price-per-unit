@@ -46,7 +46,8 @@ async function openSaveOn(page) {
     ]
   }, location.origin));
   await expect(page.locator('#lups-control')).toHaveCount(1);
-  await page.locator('#lups-auto-sort').click();
+  await page.locator('#lups-menu-button').click();
+  await page.locator('[data-lups-value="auto-asc"]').click();
 }
 
 async function visualOrder(page, selector) {
@@ -82,9 +83,10 @@ test('Save-On uses its API model with the shared predominant sorter', async ({ p
   await expect(page.locator('[data-name="sponsored-one"]')).toHaveCSS('display', 'none');
   await expect(page.locator('[data-name="sponsored-two"]')).toHaveCSS('display', 'none');
   await expect(page.locator('[data-name="ordinary-content"]')).not.toHaveCSS('display', 'none');
+  await page.locator('#lups-menu-button').hover();
   await expect(page.locator('#lups-status-row')).toBeVisible();
-  await expect(page.locator('#lups-status')).toHaveText('Website order · 2 sponsored/ad tiles hidden');
-  await expect(page.locator('#lups-restore')).toBeHidden();
+  await expect(page.locator('#lups-status')).toHaveText('Website order · 3 loaded products · 2 sponsored/ad tiles hidden');
+  await expect(page.locator('#lups-restore')).toHaveCount(0);
 });
 
 test('Save-On reads the bounded bridge array length exactly once', async ({ page }) => {
@@ -323,8 +325,10 @@ test('Save-On releases CSS order ownership between userscript sort cycles and gr
   await page.evaluate(() => window.dispatchEvent(new Event('scroll')));
   await expect(card).toHaveCSS('order', '7');
 
-  await page.locator('#lups-auto-sort').click();
-  await page.locator('#lups-restore').click();
+  await page.locator('#lups-menu-button').click();
+  await page.locator('[data-lups-value="auto-asc"]').click();
+  await page.locator('#lups-menu-button').click();
+  await page.locator('[data-lups-value="restore"]').click();
   await expect(card).toHaveCSS('order', '7');
   await card.evaluate((element) => element.style.setProperty('order', '9'));
 

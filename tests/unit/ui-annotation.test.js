@@ -63,7 +63,8 @@ describe('reload recovery control', () => {
     expect(control.querySelector('#lups-live-status').textContent).toBe(
       'Current product data was loaded before the userscript · Reload once · Website order preserved · 16 loaded products · 2 sponsored/ad tiles hidden'
     );
-    expect(control.querySelector('#lups-restore').hidden).toBe(true);
+    expect(control.querySelector('#lups-restore')).toBeNull();
+    expect(control.querySelector('#lups-status-row').dataset.lupsCritical).toBe('true');
     const reload = control.querySelector('#lups-reload');
     expect(reload.hidden).toBe(false);
     onChange.mockClear();

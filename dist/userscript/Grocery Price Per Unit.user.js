@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name        Grocery Price Per Unit
-// @version     2.0.11
+// @version     2.0.12
 // @description Shows and sorts comparable unit prices on Walmart Canada, Real Canadian Superstore, No Frills, and Save-On-Foods.
 // @match       https://www.realcanadiansuperstore.ca/*
 // @match       https://www.nofrills.ca/*
@@ -1045,9 +1045,10 @@ if (hostname === 'www.realcanadiansuperstore.ca' || hostname === 'www.nofrills.c
   /*!
    * Shopper-visible control and annotation renderer.
    *
-   * The menu selects a comparison basis; one adjacent arrow owns direction.
-   * Status has two layers: concise visible copy and one complete polite live
-   * announcement. Pending/no-match states explicitly preserve website order.
+   * The compact floating action menu selects a comparison basis; one adjacent
+   * arrow owns direction. Routine status is available as a hover/focus tooltip,
+   * while the missed-capture recovery remains visibly actionable. Pending and
+   * no-match states explicitly preserve website order.
    * Obstruction avoidance reads geometry only and never operates the page layer.
    */
   var LABELS = { mass: "$/kg", volume: "$/L", count: "$/each", total: "total price" };
@@ -1081,6 +1082,14 @@ if (hostname === 'www.realcanadiansuperstore.ca' || hostname === 'www.nofrills.c
     ["mass-asc", "Compare a unit"],
     ["total-asc", "Total price"]
   ]);
+  var MENU_ICONS = {
+    restore: "\u21BA",
+    "auto-asc": "A",
+    "mass-asc": "kg",
+    "volume-asc": "L",
+    "count-asc": "#",
+    "total-asc": "$"
+  };
   var OUTSIDE_CLICK = Symbol.for("grocery-price-per-unit.outside-click.v1");
   function activeValue(state2) {
     return state2.restored ? "restore" : `${state2.dimension}-${state2.direction}`;
@@ -1243,6 +1252,7 @@ if (hostname === 'www.realcanadiansuperstore.ca' || hostname === 'www.nofrills.c
     button.setAttribute("aria-controls", "lups-menu");
     button.setAttribute("aria-haspopup", "menu");
     button.setAttribute("aria-labelledby", "lups-label lups-menu-button-text");
+    button.setAttribute("aria-describedby", "lups-status");
     button.setAttribute("aria-expanded", "false");
     button.textContent = "";
     const buttonCopy = document.createElement("span");
@@ -1252,23 +1262,19 @@ if (hostname === 'www.realcanadiansuperstore.ca' || hostname === 'www.nofrills.c
     buttonKicker.textContent = "Unit price";
     const buttonText = document.createElement("span");
     buttonText.id = "lups-menu-button-text";
-    const chevron = document.createElement("span");
-    chevron.className = "lups-menu-chevron";
-    chevron.setAttribute("aria-hidden", "true");
+    const fabGlyph = document.createElement("span");
+    fabGlyph.className = "lups-fab-glyph";
+    fabGlyph.setAttribute("aria-hidden", "true");
+    fabGlyph.textContent = "\u21C5";
     buttonCopy.append(buttonKicker, buttonText);
-    button.append(buttonCopy, chevron);
+    button.append(buttonCopy, fabGlyph);
     const triggerRow = document.createElement("div");
     triggerRow.className = "lups-trigger-row";
-    const autoButton = document.createElement("button");
-    autoButton.id = "lups-auto-sort";
-    autoButton.type = "button";
-    autoButton.textContent = "Auto";
-    autoButton.setAttribute("aria-label", "Sort automatically, low to high");
     const flipButton = document.createElement("button");
     flipButton.id = "lups-flip-direction";
     flipButton.type = "button";
     flipButton.hidden = true;
-    triggerRow.append(autoButton, flipButton, button);
+    triggerRow.append(flipButton, button);
     const nativeMenuList = adapter.nativeMenuList || nativeSection.querySelector('[data-testid="menu-list"]');
     const nativeMenuHost = nativeMenuList?.parentElement;
     const menuHost = document.createElement("div");
@@ -1279,22 +1285,27 @@ if (hostname === 'www.realcanadiansuperstore.ca' || hostname === 'www.nofrills.c
     const menu = document.createElement("div");
     menu.id = "lups-menu";
     menu.className = nativeMenuList?.className || "";
+    menu.setAttribute("aria-label", "Unit price sort");
+    menu.setAttribute("aria-orientation", "vertical");
+    menu.setAttribute("role", "menu");
     menu.tabIndex = -1;
     menu.style.cssText = "opacity:1;visibility:visible;transform:none;max-height:min(70vh,560px);overflow-y:auto;";
     const menuOptions = document.createElement("div");
     menuOptions.id = "lups-menu-options";
-    menuOptions.setAttribute("aria-label", "Unit price sort");
-    menuOptions.setAttribute("role", "menu");
-    menuOptions.setAttribute("aria-orientation", "vertical");
-    const guide = document.createElement("details");
-    guide.className = "lups-guide";
-    const guideSummary = document.createElement("summary");
-    guideSummary.textContent = "How comparison works";
-    guideSummary.setAttribute("aria-expanded", "false");
-    const guideCopy = document.createElement("p");
-    guideCopy.textContent = "Automatic uses the most common comparable unit among loaded products. Use the arrow beside the selector to reverse the current sort. We never compare $/kg, $/L, and $/each. Retailer means the store supplied the unit price; Calculated uses its current price and package quantity.";
-    guide.append(guideSummary, guideCopy);
-    menu.append(menuOptions, guide);
+    menuOptions.setAttribute("role", "presentation");
+    const defaultButton = document.createElement("button");
+    defaultButton.id = "lups-default";
+    defaultButton.type = "button";
+    defaultButton.tabIndex = -1;
+    defaultButton.setAttribute("role", "menuitem");
+    const defaultCopy = document.createElement("span");
+    defaultCopy.className = "lups-default-copy";
+    const defaultIcon = document.createElement("span");
+    defaultIcon.className = "lups-option-icon";
+    defaultIcon.setAttribute("aria-hidden", "true");
+    defaultIcon.textContent = "\u2605";
+    defaultButton.append(defaultCopy, defaultIcon);
+    menu.append(menuOptions, defaultButton);
     const menuCue = document.createElement("div");
     menuCue.className = "lups-menu-overflow-cue";
     menuCue.hidden = true;
@@ -1307,7 +1318,7 @@ if (hostname === 'www.realcanadiansuperstore.ca' || hostname === 'www.nofrills.c
     select.setAttribute("aria-hidden", "true");
     select.tabIndex = -1;
     select.hidden = true;
-    const items = () => [...menuOptions.querySelectorAll("[data-lups-value]")];
+    const items = () => [...menu.querySelectorAll('[role="menuitemradio"],[role="menuitem"]')];
     function updateMenuCue() {
       const overflow = menu.scrollHeight - menu.clientHeight > 1;
       menuHost.dataset.lupsOverflow = String(overflow);
@@ -1315,10 +1326,10 @@ if (hostname === 'www.realcanadiansuperstore.ca' || hostname === 'www.nofrills.c
     }
     function closeMenu({ focusButton = false } = {}) {
       menuHost.hidden = true;
+      root.dataset.lupsMenuOpen = "false";
       button.setAttribute("aria-expanded", "false");
+      fabGlyph.textContent = "\u21C5";
       for (const item of items()) item.tabIndex = -1;
-      guide.open = false;
-      guideSummary.setAttribute("aria-expanded", "false");
       if (focusButton) button.focus();
     }
     function focusItem(item) {
@@ -1329,7 +1340,9 @@ if (hostname === 'www.realcanadiansuperstore.ca' || hostname === 'www.nofrills.c
     }
     function openMenu() {
       menuHost.hidden = false;
+      root.dataset.lupsMenuOpen = "true";
       button.setAttribute("aria-expanded", "true");
+      fabGlyph.textContent = "\xD7";
       focusItem(menuOptions.querySelector(`[data-lups-value="${visibleValue(select.value)}"]`) || items()[0]);
       updateMenuCue();
     }
@@ -1340,7 +1353,6 @@ if (hostname === 'www.realcanadiansuperstore.ca' || hostname === 'www.nofrills.c
       root.dataset.lupsMode = option[0];
       root.dataset.lupsRequestedDimension = option[2] || "";
       root.dataset.lupsDirection = option[3] || "";
-      autoButton.hidden = option[0] !== "restore";
       flipButton.hidden = option[0] === "restore";
       if (option[0] !== "restore") {
         const nextDirection = option[3] === "asc" ? "desc" : "asc";
@@ -1353,6 +1365,7 @@ if (hostname === 'www.realcanadiansuperstore.ca' || hostname === 'www.nofrills.c
         item.setAttribute("aria-checked", String(chosen));
         item.querySelector("[data-lups-tick]")?.toggleAttribute("hidden", !chosen);
       }
+      updateDefaultAction();
       closeMenu({ focusButton });
       if (option[0] === "restore") onChange({ type: "restore" });
       else onChange({ type: "sort", dimension: option[2], direction: option[3] });
@@ -1410,14 +1423,26 @@ if (hostname === 'www.realcanadiansuperstore.ca' || hostname === 'www.nofrills.c
       itemDetail.className = "lups-option-detail";
       itemDetail.textContent = detail;
       copy.append(itemTitle, itemDetail);
+      const icon = document.createElement("span");
+      icon.className = "lups-option-icon";
+      icon.setAttribute("aria-hidden", "true");
+      icon.textContent = MENU_ICONS[value];
       const tick = makeTick(nativeTick);
       tick.removeAttribute("data-testid");
       tick.dataset.lupsTick = "";
-      item.append(copy, tick);
+      icon.append(tick);
+      item.append(copy, icon);
       item.addEventListener("click", () => chooseMenuOption(value));
       groupItems.append(item);
     }
     select.value = activeValue(state2);
+    root.dataset.lupsDefaultMode = select.value;
+    function updateDefaultAction(saved = false) {
+      const isDefault = root.dataset.lupsDefaultMode === select.value;
+      defaultCopy.textContent = saved ? "Default saved" : isDefault ? "Current default" : "Use as default";
+      defaultButton.setAttribute("aria-label", saved ? `${buttonText.textContent} saved as this store's default` : isDefault ? `${buttonText.textContent} is this store's current default` : `Use ${buttonText.textContent} as this store's default`);
+      defaultButton.dataset.lupsSaved = String(saved);
+    }
     select.addEventListener("change", () => choose(select.value, { focusButton: true, emit: true }));
     flipButton.addEventListener("click", () => {
       const match = /^(auto|mass|volume|count|total)-(asc|desc)$/.exec(select.value);
@@ -1425,18 +1450,19 @@ if (hostname === 'www.realcanadiansuperstore.ca' || hostname === 'www.nofrills.c
       const partner = `${match[1]}-${match[2] === "asc" ? "desc" : "asc"}`;
       choose(partner, { focusButton: true, emit: true });
     });
-    autoButton.addEventListener("click", () => choose("auto-asc", { focusButton: true, emit: true }));
+    defaultButton.addEventListener("click", () => {
+      root.dataset.lupsDefaultMode = select.value;
+      updateDefaultAction(true);
+      root.dispatchEvent(new CustomEvent("gppu:default-change", {
+        bubbles: true,
+        detail: { value: select.value }
+      }));
+      liveStatus.textContent = `${buttonText.textContent} saved as this store's default`;
+      setTimeout(() => updateDefaultAction(), 1600);
+    });
     button.addEventListener("click", () => {
       if (menuHost.hidden) openMenu();
       else closeMenu({ focusButton: true });
-    });
-    guide.addEventListener("toggle", () => {
-      guideSummary.setAttribute("aria-expanded", String(guide.open));
-      requestAnimationFrame(() => {
-        updateMenuCue();
-        if (!menuHost.hidden && guide.open) menu.scrollTop = menu.scrollHeight;
-        updateMenuCue();
-      });
     });
     menu.addEventListener("keydown", (event) => {
       const menuItems = items();
@@ -1444,19 +1470,9 @@ if (hostname === 'www.realcanadiansuperstore.ca' || hostname === 'www.nofrills.c
       if (event.key === "Escape") {
         event.preventDefault();
         closeMenu({ focusButton: true });
-      } else if (event.key === "Tab" && document.activeElement !== guideSummary && !event.shiftKey) {
-        event.preventDefault();
-        guideSummary.focus();
-      } else if (event.key === "Tab" && document.activeElement === guideSummary && event.shiftKey) {
-        event.preventDefault();
-        focusItem(menuOptions.querySelector(`[data-lups-value="${visibleValue(select.value)}"]`) || menuItems[0]);
       } else if (event.key === "Tab") closeMenu();
       else if (event.key === "ArrowDown" || event.key === "ArrowUp") {
         event.preventDefault();
-        if (document.activeElement === guideSummary) {
-          focusItem(event.key === "ArrowUp" ? menuItems.at(-1) : menuItems[0]);
-          return;
-        }
         const delta = event.key === "ArrowDown" ? 1 : -1;
         focusItem(menuItems[(index + delta + menuItems.length) % menuItems.length]);
       } else if (event.key === "Home") {
@@ -1480,7 +1496,7 @@ if (hostname === 'www.realcanadiansuperstore.ca' || hostname === 'www.nofrills.c
     }
     const statusRow = document.createElement("div");
     statusRow.id = "lups-status-row";
-    statusRow.hidden = true;
+    statusRow.setAttribute("role", "tooltip");
     const status = document.createElement("span");
     status.id = "lups-status";
     const liveStatus = document.createElement("output");
@@ -1488,13 +1504,6 @@ if (hostname === 'www.realcanadiansuperstore.ca' || hostname === 'www.nofrills.c
     liveStatus.className = "lups-visually-hidden";
     liveStatus.setAttribute("aria-live", "polite");
     liveStatus.setAttribute("aria-atomic", "true");
-    const restoreButton = document.createElement("button");
-    restoreButton.id = "lups-restore";
-    restoreButton.type = "button";
-    restoreButton.textContent = "Restore";
-    restoreButton.setAttribute("aria-label", "Restore website order");
-    restoreButton.hidden = true;
-    restoreButton.addEventListener("click", () => choose("restore", { focusButton: true, emit: true }));
     const reloadButton = document.createElement("button");
     reloadButton.id = "lups-reload";
     reloadButton.type = "button";
@@ -1502,12 +1511,13 @@ if (hostname === 'www.realcanadiansuperstore.ca' || hostname === 'www.nofrills.c
     reloadButton.setAttribute("aria-label", "Reload page to capture current product data");
     reloadButton.hidden = true;
     reloadButton.addEventListener("click", () => onChange({ type: "reload" }));
-    statusRow.append(status, restoreButton, reloadButton);
+    statusRow.append(status, reloadButton);
     menuHost.append(menu, menuCue);
     inner.append(label, triggerRow, menuHost, select, statusRow, liveStatus);
     root.append(inner);
     (adapter.insert || ((control) => nativeSection.insertAdjacentElement("afterend", control)))(root);
     installObstructionAvoidance(root);
+    root.dataset.lupsMenuOpen = "false";
     choose(activeValue(state2));
     return root;
   }
@@ -1545,7 +1555,11 @@ if (hostname === 'www.realcanadiansuperstore.ca' || hostname === 'www.nofrills.c
       ...dimension === "total" && requestedDimension === "auto" ? ["no comparable unit prices available"] : []
     ];
     if (excluded) summaryParts.push(promotions);
-    const visibleParts = transitional || (restored ? ["Website order", ...summaryParts] : summaryParts);
+    const visibleParts = transitional || (restored ? [
+      "Website order",
+      ...loadedProducts ? [loadedProducts] : [],
+      ...excluded ? [promotions] : []
+    ] : summaryParts);
     const announcementParts = transitional || (restored ? [
       "Website order",
       ...loadedProducts ? [loadedProducts] : [],
@@ -1558,11 +1572,11 @@ if (hostname === 'www.realcanadiansuperstore.ca' || hostname === 'www.nofrills.c
     const status = root.querySelector("#lups-status");
     const visibleStatus = visibleParts.join(" \xB7 ");
     if (status.textContent !== visibleStatus) status.textContent = visibleStatus;
+    root.querySelector("#lups-menu-button").removeAttribute("title");
     const liveStatus = root.querySelector("#lups-live-status");
     const announcementStatus = announcementParts.join(" \xB7 ");
     if (liveStatus.textContent !== announcementStatus) liveStatus.textContent = announcementStatus;
-    root.querySelector("#lups-status-row").hidden = restored && !excluded;
-    root.querySelector("#lups-restore").hidden = restored || dataState === "reload-needed";
+    root.querySelector("#lups-status-row").dataset.lupsCritical = String(dataState === "reload-needed");
     root.querySelector("#lups-reload").hidden = dataState !== "reload-needed";
     root.dataset.lupsRestored = String(restored);
     root.dataset.lupsDataState = dataState || "ready";
@@ -1599,80 +1613,59 @@ if (hostname === 'www.realcanadiansuperstore.ca' || hostname === 'www.nofrills.c
       style = document.createElement("style");
       style.id = "lups-styles";
       style.textContent = `
-    #lups-control[data-lups-floating="true"]{position:fixed!important;z-index:2147483646!important;right:max(18px,env(safe-area-inset-right))!important;bottom:calc(max(18px,env(safe-area-inset-bottom)) + var(--lups-obstruction-lift,0px))!important;margin:0!important;color:#17221d;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;transition:bottom .16s ease-out!important}
-    #lups-control[data-lups-floating="true"]>div{position:relative!important;display:flex!important;align-items:flex-end!important;flex-direction:column!important;gap:7px!important}
-    #lups-label{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important}
-    .lups-visually-hidden{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important}
-    .lups-trigger-row{display:flex!important;align-items:stretch!important;justify-content:flex-end!important;gap:7px!important}
-    #lups-menu-button{box-sizing:border-box!important;display:inline-flex!important;align-items:center!important;justify-content:space-between!important;gap:12px!important;min-width:220px!important;min-height:46px!important;padding:8px 12px!important;border:1px solid #9eb9a9!important;border-radius:12px!important;background:linear-gradient(180deg,#f8fcf9 0%,#edf7f0 100%)!important;color:#155f45!important;box-shadow:0 2px 7px #163f2b1a!important;font:600 14px/1.2 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif!important;white-space:nowrap!important;transition:border-color .15s ease,box-shadow .15s ease,background .15s ease!important}
-    #lups-menu-button:hover{border-color:#438a6d!important;background:#e8f5ec!important;box-shadow:0 2px 5px #163f2b1f!important}
-    #lups-menu-button[aria-expanded="true"]{border-color:#197454!important;background:#e4f3e9!important;box-shadow:0 0 0 3px #1b805326!important}
-    #lups-auto-sort,#lups-flip-direction{box-sizing:border-box!important;min-height:46px!important;padding:0 12px!important;border:1px solid #9eb9a9!important;border-radius:12px!important;background:linear-gradient(180deg,#f8fcf9 0%,#edf7f0 100%)!important;color:#155f45!important;box-shadow:0 2px 7px #163f2b1a!important;font:700 12px/1 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif!important;transition:border-color .15s ease,box-shadow .15s ease,background .15s ease!important}
-    #lups-flip-direction{width:46px!important;min-width:46px!important;padding:0!important;font-size:22px!important;font-weight:750!important}
-    #lups-auto-sort:hover,#lups-flip-direction:hover{border-color:#438a6d!important;background:#e8f5ec!important;box-shadow:0 2px 5px #163f2b1f!important}
-    #lups-auto-sort[hidden],#lups-flip-direction[hidden]{display:none!important}
-    .lups-button-copy{display:flex!important;min-width:0!important;flex:1!important;align-items:flex-start!important;flex-direction:column!important;gap:1px!important;text-align:left!important}
-    .lups-button-kicker{color:#537065!important;font-size:9.5px!important;font-weight:750!important;letter-spacing:.08em!important;line-height:1.1!important;text-transform:uppercase!important}
-    #lups-menu-button-text{max-width:190px!important;overflow:hidden!important;text-overflow:ellipsis!important}
-    .lups-menu-chevron{box-sizing:border-box!important;width:8px!important;height:8px!important;flex:0 0 auto!important;margin:0 3px 4px 0!important;border-right:2px solid #39735e!important;border-bottom:2px solid #39735e!important;transform:rotate(45deg)!important;transition:transform .15s ease,margin .15s ease!important}
-    #lups-menu-button[aria-expanded="true"] .lups-menu-chevron{margin:4px 3px 0 0!important;transform:rotate(225deg)!important}
-    #lups-status-row{box-sizing:border-box!important;display:flex!important;max-width:min(360px,calc(100vw - 24px))!important;align-items:center!important;gap:8px!important;padding:7px 8px 7px 10px!important;border:1px solid #d6e3db!important;border-radius:12px!important;background:#fffffff5!important;box-shadow:0 3px 12px #163f2b1a!important;color:#30473d!important}
-    #lups-status-row[hidden],#lups-restore[hidden],#lups-reload[hidden]{display:none!important}
-    #lups-status{min-width:0!important;flex:1!important;font:550 11.5px/1.35 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif!important;text-align:left!important}
-    #lups-restore,#lups-reload{box-sizing:border-box!important;min-height:44px!important;padding:7px 10px!important;border:1px solid #9eb9a9!important;border-radius:9px!important;background:#edf7f0!important;color:#155f45!important;font:700 11.5px/1.1 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif!important;white-space:nowrap!important}
-    #lups-restore:hover,#lups-reload:hover{border-color:#438a6d!important;background:#e4f3e9!important}
-    #lups-control[data-lups-floating="true"] [data-lups-tick][hidden]{display:none!important}
+    #lups-control[data-lups-floating="true"]{position:fixed!important;z-index:2147483646!important;right:max(18px,env(safe-area-inset-right))!important;bottom:calc(max(18px,env(safe-area-inset-bottom)) + var(--lups-obstruction-lift,0px))!important;margin:0!important;color:#273244!important;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif!important;transition:bottom .16s ease-out!important}
+    #lups-control[data-lups-floating="true"]>div{position:relative!important;display:flex!important;align-items:flex-end!important;flex-direction:column!important;gap:8px!important}
+    #lups-label,.lups-visually-hidden,.lups-button-copy{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important}
+    .lups-trigger-row{display:flex!important;align-items:center!important;justify-content:flex-end!important;gap:8px!important}
+    #lups-menu-button,#lups-flip-direction{box-sizing:border-box!important;display:grid!important;width:50px!important;min-width:50px!important;height:50px!important;min-height:50px!important;padding:0!important;place-items:center!important;border:1px solid #1e293b!important;border-radius:999px!important;background:#27364a!important;color:#fff!important;box-shadow:0 9px 24px #0f172a35,0 2px 6px #0f172a24!important;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif!important;transition:transform .16s ease,box-shadow .16s ease,background .16s ease!important}
+    #lups-menu-button:hover,#lups-menu-button[aria-expanded="true"]{background:#172033!important;box-shadow:0 12px 30px #0f172a42,0 3px 8px #0f172a2e!important;transform:translateY(-1px)!important}
+    .lups-fab-glyph{font-size:22px!important;font-weight:500!important;line-height:1!important}
+    #lups-flip-direction{width:44px!important;min-width:44px!important;height:44px!important;min-height:44px!important;border-color:#d7dee8!important;background:#fffffff5!important;color:#334155!important;box-shadow:0 5px 16px #0f172a1f,0 1px 3px #0f172a1a!important;font-size:21px!important;font-weight:650!important}
+    #lups-flip-direction:hover{border-color:#aab5c4!important;background:#f8fafc!important;transform:translateY(-1px)!important}
+    #lups-flip-direction[hidden],#lups-reload[hidden],#lups-status-row[hidden]{display:none!important}
+    #lups-status-row{position:absolute!important;right:0!important;bottom:calc(100% + 11px)!important;box-sizing:border-box!important;display:flex!important;width:max-content!important;max-width:min(340px,calc(100vw - 24px))!important;align-items:center!important;gap:9px!important;padding:9px 11px!important;border:1px solid #d8dee8!important;border-radius:12px!important;background:#fffffff8!important;box-shadow:0 10px 28px #0f172a24,0 2px 6px #0f172a14!important;color:#334155!important;opacity:0!important;visibility:hidden!important;transform:translateY(4px)!important;pointer-events:none!important;transition:opacity .14s ease,transform .14s ease,visibility .14s ease!important}
+    #lups-control[data-lups-menu-open="false"]:has(#lups-menu-button:hover) #lups-status-row[data-lups-critical="false"],#lups-control[data-lups-menu-open="false"]:has(#lups-menu-button:focus-visible) #lups-status-row[data-lups-critical="false"]{opacity:1!important;visibility:visible!important;transform:none!important}
+    #lups-status-row[data-lups-critical="true"]{position:static!important;width:min(340px,calc(100vw - 24px))!important;border-color:#e6c36a!important;background:#fffaf0!important;color:#5f4615!important;opacity:1!important;visibility:visible!important;transform:none!important;pointer-events:auto!important}
+    #lups-status{min-width:0!important;flex:1!important;font:550 11.5px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif!important;text-align:left!important}
+    #lups-reload{box-sizing:border-box!important;min-height:44px!important;padding:7px 11px!important;border:1px solid #c9a84d!important;border-radius:999px!important;background:#fff!important;color:#5f4615!important;font:700 11.5px/1.1 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif!important;white-space:nowrap!important}
+    #lups-reload:hover{background:#fff3cf!important}
     #lups-menu-host[hidden]{display:none!important}
-    #lups-menu-host{box-sizing:border-box!important;top:auto!important;right:0!important;bottom:calc(100% + 8px)!important;width:min(350px,calc(100vw - 24px))!important;min-width:0!important}
-    #lups-menu{box-sizing:border-box!important;width:100%!important;max-height:min(70vh,calc(100dvh - var(--lups-obstruction-lift,0px) - 140px),560px)!important;padding:8px!important;border:1px solid #d8e2dc!important;border-radius:14px!important;background:#fff!important;color:#17221d!important;box-shadow:0 18px 48px #14251d2e,0 3px 10px #14251d1f!important}
+    #lups-menu-host{box-sizing:border-box!important;top:auto!important;right:0!important;bottom:calc(100% + 10px)!important;width:max-content!important;min-width:0!important}
+    #lups-menu{box-sizing:border-box!important;width:max-content!important;max-width:calc(100vw - 24px)!important;max-height:min(72vh,calc(100dvh - var(--lups-obstruction-lift,0px) - 100px),540px)!important;padding:5px!important;border:0!important;border-radius:18px!important;background:transparent!important;color:#273244!important;box-shadow:none!important;scrollbar-width:thin!important}
+    #lups-menu-options{display:flex!important;align-items:flex-end!important;flex-direction:column!important;gap:7px!important}
     #lups-menu-host[data-lups-overflow="true"] #lups-menu{padding-bottom:38px!important}
-    .lups-menu-overflow-cue{position:absolute!important;right:1px!important;bottom:1px!important;left:1px!important;display:flex!important;height:38px!important;box-sizing:border-box!important;align-items:flex-end!important;justify-content:center!important;padding:13px 8px 6px!important;border-radius:0 0 13px 13px!important;background:linear-gradient(180deg,#ffffff00 0%,#fff 48%)!important;color:#39735e!important;font:700 10.5px/1.2 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif!important;letter-spacing:.02em!important;pointer-events:none!important}
+    .lups-menu-overflow-cue{position:absolute!important;right:5px!important;bottom:2px!important;display:flex!important;height:34px!important;box-sizing:border-box!important;align-items:flex-end!important;justify-content:center!important;padding:12px 10px 5px!important;border-radius:999px!important;background:linear-gradient(180deg,#ffffff00 0%,#fff 50%)!important;color:#526071!important;font:700 10px/1.2 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif!important;pointer-events:none!important}
     .lups-menu-overflow-cue[hidden]{display:none!important}
-    .lups-menu-section{display:block!important}
-    .lups-menu-group{padding:9px 8px 4px!important;color:#607068!important;font-size:10px!important;font-weight:750!important;letter-spacing:.08em!important;line-height:1!important;text-transform:uppercase!important}
-    .lups-menu-group:first-child{padding-top:5px!important}
-    .lups-menu-group-items{display:grid!important;grid-template-columns:1fr!important;gap:4px!important}
-    .lups-guide{margin:7px 2px 1px!important;padding:5px 8px 0!important;border-top:1px solid #e1e8e3!important;color:#30473d!important}
-    .lups-guide summary{box-sizing:border-box!important;display:flex!important;min-height:44px!important;align-items:center!important;justify-content:space-between!important;gap:12px!important;cursor:pointer!important;list-style:none!important;color:#24684f!important;font:700 12px/1.25 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif!important}
-    .lups-guide summary::-webkit-details-marker{display:none!important}
-    .lups-guide summary::after{content:'+'!important;display:grid!important;width:24px!important;height:24px!important;flex:0 0 auto!important;place-items:center!important;border-radius:999px!important;background:#edf7f0!important;color:#197454!important;font-size:17px!important;line-height:1!important}
-    .lups-guide[open] summary::after{content:'\u2212'!important}
-    .lups-guide p{margin:0 0 10px!important;padding:1px 2px 2px!important;color:#50645a!important;font:500 11.5px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif!important}
-    #lups-menu [data-lups-value]{box-sizing:border-box!important;display:flex!important;align-items:center!important;justify-content:space-between!important;gap:7px!important;width:100%!important;min-width:0!important;min-height:46px!important;padding:6px 8px!important;border:0!important;border-radius:9px!important;background:transparent!important;color:inherit!important;text-align:left!important;font-family:inherit!important}
-    #lups-menu [data-lups-value]:hover,#lups-menu [data-lups-value]:focus-visible{background:#f0f7f2!important}
-    #lups-menu [data-lups-value][aria-checked="true"]{background:#e4f3e9!important;color:#0e6245!important}
-    .lups-option-copy{display:flex;min-width:0;flex:1;flex-direction:column;gap:2px}
-    .lups-option-title{overflow:hidden;font-size:13px;line-height:1.2;font-weight:650;text-overflow:ellipsis;white-space:nowrap}
-    .lups-option-detail{overflow:hidden;color:#607068;font-size:11.5px;line-height:1.25;font-weight:450;text-overflow:ellipsis;white-space:nowrap}
-    #lups-menu [aria-checked="true"] .lups-option-detail{color:#39735e}
-    #lups-menu [data-lups-tick]{flex:0 0 auto;color:#197454}
-    #lups-control :focus-visible{outline:3px solid #1769aa;outline-offset:2px}
-    .lups-annotation{box-sizing:border-box!important;display:block!important;width:max-content!important;max-width:100%!important;margin:6px 0!important;padding:4px 8px!important;border:1px solid #9bc9ae!important;border-radius:999px!important;background:#edf8ef!important;color:#184d27!important;font:650 12px/1.3 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif!important}
-    .lups-annotation[data-source="calculated"]{border-color:#1769aa!important;background:#eef6fc!important;color:#164b72!important}.lups-annotation[data-source="unknown"]{border-color:#777!important;background:#f4f4f4!important;color:#555!important}
-    @media(max-width:640px){#lups-control[data-lups-floating="true"]{right:max(10px,env(safe-area-inset-right))!important;bottom:calc(max(14px,env(safe-area-inset-bottom)) + var(--lups-obstruction-lift,0px))!important}#lups-menu-button{min-width:0!important;width:196px!important;min-height:44px!important;padding:7px 10px!important;font-size:13px!important}#lups-auto-sort,#lups-flip-direction{min-height:44px!important}#lups-flip-direction{width:44px!important;min-width:44px!important}#lups-menu-button-text{max-width:160px!important}#lups-status-row{max-width:calc(100vw - 20px)!important}#lups-menu-host{position:absolute!important;right:0!important;bottom:calc(100% + 8px)!important;width:calc(100vw - 20px - env(safe-area-inset-left) - env(safe-area-inset-right))!important}#lups-menu{max-height:min(64dvh,calc(100dvh - var(--lups-obstruction-lift,0px) - 150px),520px)!important}}
+    .lups-menu-section,.lups-menu-group-items{display:contents!important}
+    .lups-menu-group{display:none!important}
+    #lups-menu [data-lups-value],#lups-default{box-sizing:border-box!important;display:flex!important;min-width:0!important;min-height:44px!important;align-items:center!important;justify-content:flex-end!important;gap:8px!important;padding:0!important;border:0!important;background:transparent!important;color:#334155!important;text-align:left!important;font-family:inherit!important;cursor:pointer!important}
+    .lups-option-copy,.lups-default-copy{box-sizing:border-box!important;display:flex!important;min-width:0!important;min-height:34px!important;align-items:center!important;padding:7px 12px!important;border:1px solid #d9e0e9!important;border-radius:999px!important;background:#fffffff7!important;box-shadow:0 4px 13px #0f172a1c,0 1px 3px #0f172a14!important;color:#344256!important;font-size:12.5px!important;font-weight:600!important;line-height:1.15!important;white-space:nowrap!important;transition:transform .14s ease,border-color .14s ease,background .14s ease!important}
+    .lups-option-title{overflow:hidden!important;font:inherit!important;text-overflow:ellipsis!important;white-space:nowrap!important}
+    .lups-option-detail{display:none!important}
+    .lups-option-icon{position:relative!important;box-sizing:border-box!important;display:grid!important;width:42px!important;min-width:42px!important;height:42px!important;place-items:center!important;border:1px solid #d7dee8!important;border-radius:999px!important;background:#fffffff8!important;box-shadow:0 5px 15px #0f172a20,0 1px 3px #0f172a18!important;color:#526071!important;font-size:11px!important;font-weight:750!important;line-height:1!important;transition:transform .14s ease,border-color .14s ease,background .14s ease!important}
+    #lups-menu [data-lups-value]:hover .lups-option-copy,#lups-menu [data-lups-value]:focus-visible .lups-option-copy,#lups-default:hover .lups-default-copy,#lups-default:focus-visible .lups-default-copy{border-color:#aeb8c6!important;background:#fff!important;transform:translateX(-2px)!important}
+    #lups-menu [data-lups-value]:hover .lups-option-icon,#lups-menu [data-lups-value]:focus-visible .lups-option-icon,#lups-default:hover .lups-option-icon,#lups-default:focus-visible .lups-option-icon{border-color:#aeb8c6!important;background:#f8fafc!important;transform:scale(1.04)!important}
+    #lups-menu [data-lups-value][aria-checked="true"] .lups-option-copy{border-color:#aeb7d8!important;background:#eef0f8!important;color:#303a68!important}
+    #lups-menu [data-lups-value][aria-checked="true"] .lups-option-icon{border-color:#27364a!important;background:#27364a!important;color:#fff!important}
+    #lups-default{margin-top:7px!important}
+    #lups-default[data-lups-saved="true"] .lups-default-copy,#lups-default[data-lups-saved="true"] .lups-option-icon{border-color:#9ca8c7!important;background:#eef0f8!important;color:#303a68!important}
+    #lups-control[data-lups-floating="true"] [data-lups-tick][hidden]{display:none!important}
+    #lups-menu [data-lups-tick]{position:absolute!important;right:-3px!important;top:-3px!important;display:grid!important;width:15px!important;height:15px!important;place-items:center!important;border:2px solid #fff!important;border-radius:999px!important;background:#6366a8!important;color:#fff!important;font-size:9px!important;line-height:1!important}
+    #lups-control :focus-visible{outline:3px solid #6476b8!important;outline-offset:3px!important}
+    .lups-annotation{box-sizing:border-box!important;display:block!important;width:max-content!important;max-width:100%!important;margin:6px 0!important;padding:4px 8px!important;border:1px solid #cbd5e1!important;border-radius:999px!important;background:#f8fafc!important;color:#334155!important;font:650 12px/1.3 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif!important}
+    .lups-annotation[data-source="calculated"]{border-color:#c7ccef!important;background:#f1f2fb!important;color:#3f477c!important}.lups-annotation[data-source="unknown"]{border-color:#d1d5db!important;background:#f7f7f8!important;color:#5f6672!important}
+    @media(max-width:640px){#lups-control[data-lups-floating="true"]{right:max(10px,env(safe-area-inset-right))!important;bottom:calc(max(14px,env(safe-area-inset-bottom)) + var(--lups-obstruction-lift,0px))!important}#lups-menu-button{width:48px!important;min-width:48px!important;height:48px!important;min-height:48px!important}#lups-status-row{max-width:calc(100vw - 20px)!important}#lups-status-row[data-lups-critical="true"]{width:calc(100vw - 20px)!important}#lups-menu-host{position:absolute!important;right:0!important;bottom:calc(100% + 8px)!important}#lups-menu{max-width:calc(100vw - 20px)!important;max-height:min(72dvh,calc(100dvh - var(--lups-obstruction-lift,0px) - 88px),520px)!important}.lups-option-copy,.lups-default-copy{max-width:calc(100vw - 78px)!important}}
     @media(forced-colors:active){
       #lups-control[data-lups-floating="true"]{color:CanvasText!important}
-      #lups-menu-button,#lups-auto-sort,#lups-flip-direction,#lups-restore,#lups-reload,#lups-status-row,#lups-menu,.lups-guide summary::after{border-color:CanvasText!important;background:Canvas!important;color:CanvasText!important;box-shadow:none!important}
-      #lups-menu [data-lups-value]{border:2px solid transparent!important;background:Canvas!important;color:CanvasText!important}
-      #lups-menu [data-lups-value][aria-checked="true"]{border-color:Highlight!important;background:Highlight!important;color:HighlightText!important}
-      #lups-menu [data-lups-value][aria-checked="true"] .lups-option-detail,#lups-menu [data-lups-value][aria-checked="true"] [data-lups-tick]{color:HighlightText!important}
-      .lups-button-kicker,.lups-option-detail,.lups-menu-group,.lups-guide,.lups-guide p,.lups-guide summary{color:CanvasText!important}
+      #lups-menu-button,#lups-flip-direction,#lups-reload,#lups-status-row,.lups-option-copy,.lups-default-copy,.lups-option-icon{border-width:2px!important;border-color:CanvasText!important;background:Canvas!important;color:CanvasText!important;box-shadow:none!important}
+      #lups-menu [data-lups-value][aria-checked="true"] .lups-option-copy,#lups-menu [data-lups-value][aria-checked="true"] .lups-option-icon{border-color:Highlight!important;background:Highlight!important;color:HighlightText!important}
       .lups-menu-overflow-cue{background:Canvas!important;color:CanvasText!important}
       .lups-annotation,.lups-annotation[data-source="calculated"],.lups-annotation[data-source="unknown"]{border-color:CanvasText!important;background:Canvas!important;color:CanvasText!important}
-      .lups-annotation{border-width:2px!important;border-style:solid!important}
-      .lups-annotation[data-source="calculated"]{border-style:dashed!important}
-      .lups-annotation[data-source="unknown"]{border-style:dotted!important}
+      .lups-annotation{border-width:2px!important;border-style:solid!important}.lups-annotation[data-source="calculated"]{border-style:dashed!important}.lups-annotation[data-source="unknown"]{border-style:dotted!important}
       #lups-control :focus-visible{outline:3px solid Highlight!important}
     }
-    @media(prefers-contrast:more){
-      #lups-menu-button,#lups-auto-sort,#lups-flip-direction,#lups-restore,#lups-reload,#lups-status-row,#lups-menu{border-width:2px!important;box-shadow:none!important}
-      #lups-menu [data-lups-value][aria-checked="true"]{outline:2px solid currentColor!important;outline-offset:-2px!important}
-      .lups-annotation{border-width:2px!important}
-      .lups-annotation[data-source="calculated"]{border-style:dashed!important}
-      .lups-annotation[data-source="unknown"]{border-style:dotted!important}
-      #lups-status{font-weight:650!important}
-    }
-    @media(prefers-reduced-motion:reduce){#lups-control[data-lups-floating="true"],#lups-menu-button,#lups-auto-sort,#lups-flip-direction,.lups-menu-chevron{transition:none!important}}
+    @media(prefers-contrast:more){#lups-menu-button,#lups-flip-direction,#lups-reload,#lups-status-row,.lups-option-copy,.lups-default-copy,.lups-option-icon{border-width:2px!important;box-shadow:none!important}.lups-annotation{border-width:2px!important}.lups-annotation[data-source="calculated"]{border-style:dashed!important}.lups-annotation[data-source="unknown"]{border-style:dotted!important}#lups-status{font-weight:650!important}}
+    @media(prefers-reduced-motion:reduce){#lups-control[data-lups-floating="true"],#lups-menu-button,#lups-flip-direction,#lups-status-row,.lups-option-copy,.lups-option-icon{transition:none!important}}
     `;
       document.head.append(style);
     }
@@ -4111,9 +4104,10 @@ if (hostname === 'www.walmart.ca') {
   /*!
    * Shopper-visible control and annotation renderer.
    *
-   * The menu selects a comparison basis; one adjacent arrow owns direction.
-   * Status has two layers: concise visible copy and one complete polite live
-   * announcement. Pending/no-match states explicitly preserve website order.
+   * The compact floating action menu selects a comparison basis; one adjacent
+   * arrow owns direction. Routine status is available as a hover/focus tooltip,
+   * while the missed-capture recovery remains visibly actionable. Pending and
+   * no-match states explicitly preserve website order.
    * Obstruction avoidance reads geometry only and never operates the page layer.
    */
   var LABELS = { mass: "$/kg", volume: "$/L", count: "$/each", total: "total price" };
@@ -4147,6 +4141,14 @@ if (hostname === 'www.walmart.ca') {
     ["mass-asc", "Compare a unit"],
     ["total-asc", "Total price"]
   ]);
+  var MENU_ICONS = {
+    restore: "\u21BA",
+    "auto-asc": "A",
+    "mass-asc": "kg",
+    "volume-asc": "L",
+    "count-asc": "#",
+    "total-asc": "$"
+  };
   var OUTSIDE_CLICK = Symbol.for("grocery-price-per-unit.outside-click.v1");
   function activeValue(state2) {
     return state2.restored ? "restore" : `${state2.dimension}-${state2.direction}`;
@@ -4309,6 +4311,7 @@ if (hostname === 'www.walmart.ca') {
     button.setAttribute("aria-controls", "lups-menu");
     button.setAttribute("aria-haspopup", "menu");
     button.setAttribute("aria-labelledby", "lups-label lups-menu-button-text");
+    button.setAttribute("aria-describedby", "lups-status");
     button.setAttribute("aria-expanded", "false");
     button.textContent = "";
     const buttonCopy = document.createElement("span");
@@ -4318,23 +4321,19 @@ if (hostname === 'www.walmart.ca') {
     buttonKicker.textContent = "Unit price";
     const buttonText = document.createElement("span");
     buttonText.id = "lups-menu-button-text";
-    const chevron = document.createElement("span");
-    chevron.className = "lups-menu-chevron";
-    chevron.setAttribute("aria-hidden", "true");
+    const fabGlyph = document.createElement("span");
+    fabGlyph.className = "lups-fab-glyph";
+    fabGlyph.setAttribute("aria-hidden", "true");
+    fabGlyph.textContent = "\u21C5";
     buttonCopy.append(buttonKicker, buttonText);
-    button.append(buttonCopy, chevron);
+    button.append(buttonCopy, fabGlyph);
     const triggerRow = document.createElement("div");
     triggerRow.className = "lups-trigger-row";
-    const autoButton = document.createElement("button");
-    autoButton.id = "lups-auto-sort";
-    autoButton.type = "button";
-    autoButton.textContent = "Auto";
-    autoButton.setAttribute("aria-label", "Sort automatically, low to high");
     const flipButton = document.createElement("button");
     flipButton.id = "lups-flip-direction";
     flipButton.type = "button";
     flipButton.hidden = true;
-    triggerRow.append(autoButton, flipButton, button);
+    triggerRow.append(flipButton, button);
     const nativeMenuList = adapter.nativeMenuList || nativeSection.querySelector('[data-testid="menu-list"]');
     const nativeMenuHost = nativeMenuList?.parentElement;
     const menuHost = document.createElement("div");
@@ -4345,22 +4344,27 @@ if (hostname === 'www.walmart.ca') {
     const menu = document.createElement("div");
     menu.id = "lups-menu";
     menu.className = nativeMenuList?.className || "";
+    menu.setAttribute("aria-label", "Unit price sort");
+    menu.setAttribute("aria-orientation", "vertical");
+    menu.setAttribute("role", "menu");
     menu.tabIndex = -1;
     menu.style.cssText = "opacity:1;visibility:visible;transform:none;max-height:min(70vh,560px);overflow-y:auto;";
     const menuOptions = document.createElement("div");
     menuOptions.id = "lups-menu-options";
-    menuOptions.setAttribute("aria-label", "Unit price sort");
-    menuOptions.setAttribute("role", "menu");
-    menuOptions.setAttribute("aria-orientation", "vertical");
-    const guide = document.createElement("details");
-    guide.className = "lups-guide";
-    const guideSummary = document.createElement("summary");
-    guideSummary.textContent = "How comparison works";
-    guideSummary.setAttribute("aria-expanded", "false");
-    const guideCopy = document.createElement("p");
-    guideCopy.textContent = "Automatic uses the most common comparable unit among loaded products. Use the arrow beside the selector to reverse the current sort. We never compare $/kg, $/L, and $/each. Retailer means the store supplied the unit price; Calculated uses its current price and package quantity.";
-    guide.append(guideSummary, guideCopy);
-    menu.append(menuOptions, guide);
+    menuOptions.setAttribute("role", "presentation");
+    const defaultButton = document.createElement("button");
+    defaultButton.id = "lups-default";
+    defaultButton.type = "button";
+    defaultButton.tabIndex = -1;
+    defaultButton.setAttribute("role", "menuitem");
+    const defaultCopy = document.createElement("span");
+    defaultCopy.className = "lups-default-copy";
+    const defaultIcon = document.createElement("span");
+    defaultIcon.className = "lups-option-icon";
+    defaultIcon.setAttribute("aria-hidden", "true");
+    defaultIcon.textContent = "\u2605";
+    defaultButton.append(defaultCopy, defaultIcon);
+    menu.append(menuOptions, defaultButton);
     const menuCue = document.createElement("div");
     menuCue.className = "lups-menu-overflow-cue";
     menuCue.hidden = true;
@@ -4373,7 +4377,7 @@ if (hostname === 'www.walmart.ca') {
     select.setAttribute("aria-hidden", "true");
     select.tabIndex = -1;
     select.hidden = true;
-    const items = () => [...menuOptions.querySelectorAll("[data-lups-value]")];
+    const items = () => [...menu.querySelectorAll('[role="menuitemradio"],[role="menuitem"]')];
     function updateMenuCue() {
       const overflow = menu.scrollHeight - menu.clientHeight > 1;
       menuHost.dataset.lupsOverflow = String(overflow);
@@ -4381,10 +4385,10 @@ if (hostname === 'www.walmart.ca') {
     }
     function closeMenu({ focusButton = false } = {}) {
       menuHost.hidden = true;
+      root.dataset.lupsMenuOpen = "false";
       button.setAttribute("aria-expanded", "false");
+      fabGlyph.textContent = "\u21C5";
       for (const item of items()) item.tabIndex = -1;
-      guide.open = false;
-      guideSummary.setAttribute("aria-expanded", "false");
       if (focusButton) button.focus();
     }
     function focusItem(item) {
@@ -4395,7 +4399,9 @@ if (hostname === 'www.walmart.ca') {
     }
     function openMenu() {
       menuHost.hidden = false;
+      root.dataset.lupsMenuOpen = "true";
       button.setAttribute("aria-expanded", "true");
+      fabGlyph.textContent = "\xD7";
       focusItem(menuOptions.querySelector(`[data-lups-value="${visibleValue(select.value)}"]`) || items()[0]);
       updateMenuCue();
     }
@@ -4406,7 +4412,6 @@ if (hostname === 'www.walmart.ca') {
       root.dataset.lupsMode = option[0];
       root.dataset.lupsRequestedDimension = option[2] || "";
       root.dataset.lupsDirection = option[3] || "";
-      autoButton.hidden = option[0] !== "restore";
       flipButton.hidden = option[0] === "restore";
       if (option[0] !== "restore") {
         const nextDirection = option[3] === "asc" ? "desc" : "asc";
@@ -4419,6 +4424,7 @@ if (hostname === 'www.walmart.ca') {
         item.setAttribute("aria-checked", String(chosen));
         item.querySelector("[data-lups-tick]")?.toggleAttribute("hidden", !chosen);
       }
+      updateDefaultAction();
       closeMenu({ focusButton });
       if (option[0] === "restore") onChange({ type: "restore" });
       else onChange({ type: "sort", dimension: option[2], direction: option[3] });
@@ -4476,14 +4482,26 @@ if (hostname === 'www.walmart.ca') {
       itemDetail.className = "lups-option-detail";
       itemDetail.textContent = detail;
       copy.append(itemTitle, itemDetail);
+      const icon = document.createElement("span");
+      icon.className = "lups-option-icon";
+      icon.setAttribute("aria-hidden", "true");
+      icon.textContent = MENU_ICONS[value];
       const tick = makeTick(nativeTick);
       tick.removeAttribute("data-testid");
       tick.dataset.lupsTick = "";
-      item.append(copy, tick);
+      icon.append(tick);
+      item.append(copy, icon);
       item.addEventListener("click", () => chooseMenuOption(value));
       groupItems.append(item);
     }
     select.value = activeValue(state2);
+    root.dataset.lupsDefaultMode = select.value;
+    function updateDefaultAction(saved = false) {
+      const isDefault = root.dataset.lupsDefaultMode === select.value;
+      defaultCopy.textContent = saved ? "Default saved" : isDefault ? "Current default" : "Use as default";
+      defaultButton.setAttribute("aria-label", saved ? `${buttonText.textContent} saved as this store's default` : isDefault ? `${buttonText.textContent} is this store's current default` : `Use ${buttonText.textContent} as this store's default`);
+      defaultButton.dataset.lupsSaved = String(saved);
+    }
     select.addEventListener("change", () => choose(select.value, { focusButton: true, emit: true }));
     flipButton.addEventListener("click", () => {
       const match = /^(auto|mass|volume|count|total)-(asc|desc)$/.exec(select.value);
@@ -4491,18 +4509,19 @@ if (hostname === 'www.walmart.ca') {
       const partner = `${match[1]}-${match[2] === "asc" ? "desc" : "asc"}`;
       choose(partner, { focusButton: true, emit: true });
     });
-    autoButton.addEventListener("click", () => choose("auto-asc", { focusButton: true, emit: true }));
+    defaultButton.addEventListener("click", () => {
+      root.dataset.lupsDefaultMode = select.value;
+      updateDefaultAction(true);
+      root.dispatchEvent(new CustomEvent("gppu:default-change", {
+        bubbles: true,
+        detail: { value: select.value }
+      }));
+      liveStatus.textContent = `${buttonText.textContent} saved as this store's default`;
+      setTimeout(() => updateDefaultAction(), 1600);
+    });
     button.addEventListener("click", () => {
       if (menuHost.hidden) openMenu();
       else closeMenu({ focusButton: true });
-    });
-    guide.addEventListener("toggle", () => {
-      guideSummary.setAttribute("aria-expanded", String(guide.open));
-      requestAnimationFrame(() => {
-        updateMenuCue();
-        if (!menuHost.hidden && guide.open) menu.scrollTop = menu.scrollHeight;
-        updateMenuCue();
-      });
     });
     menu.addEventListener("keydown", (event) => {
       const menuItems = items();
@@ -4510,19 +4529,9 @@ if (hostname === 'www.walmart.ca') {
       if (event.key === "Escape") {
         event.preventDefault();
         closeMenu({ focusButton: true });
-      } else if (event.key === "Tab" && document.activeElement !== guideSummary && !event.shiftKey) {
-        event.preventDefault();
-        guideSummary.focus();
-      } else if (event.key === "Tab" && document.activeElement === guideSummary && event.shiftKey) {
-        event.preventDefault();
-        focusItem(menuOptions.querySelector(`[data-lups-value="${visibleValue(select.value)}"]`) || menuItems[0]);
       } else if (event.key === "Tab") closeMenu();
       else if (event.key === "ArrowDown" || event.key === "ArrowUp") {
         event.preventDefault();
-        if (document.activeElement === guideSummary) {
-          focusItem(event.key === "ArrowUp" ? menuItems.at(-1) : menuItems[0]);
-          return;
-        }
         const delta = event.key === "ArrowDown" ? 1 : -1;
         focusItem(menuItems[(index + delta + menuItems.length) % menuItems.length]);
       } else if (event.key === "Home") {
@@ -4546,7 +4555,7 @@ if (hostname === 'www.walmart.ca') {
     }
     const statusRow = document.createElement("div");
     statusRow.id = "lups-status-row";
-    statusRow.hidden = true;
+    statusRow.setAttribute("role", "tooltip");
     const status = document.createElement("span");
     status.id = "lups-status";
     const liveStatus = document.createElement("output");
@@ -4554,13 +4563,6 @@ if (hostname === 'www.walmart.ca') {
     liveStatus.className = "lups-visually-hidden";
     liveStatus.setAttribute("aria-live", "polite");
     liveStatus.setAttribute("aria-atomic", "true");
-    const restoreButton = document.createElement("button");
-    restoreButton.id = "lups-restore";
-    restoreButton.type = "button";
-    restoreButton.textContent = "Restore";
-    restoreButton.setAttribute("aria-label", "Restore website order");
-    restoreButton.hidden = true;
-    restoreButton.addEventListener("click", () => choose("restore", { focusButton: true, emit: true }));
     const reloadButton = document.createElement("button");
     reloadButton.id = "lups-reload";
     reloadButton.type = "button";
@@ -4568,12 +4570,13 @@ if (hostname === 'www.walmart.ca') {
     reloadButton.setAttribute("aria-label", "Reload page to capture current product data");
     reloadButton.hidden = true;
     reloadButton.addEventListener("click", () => onChange({ type: "reload" }));
-    statusRow.append(status, restoreButton, reloadButton);
+    statusRow.append(status, reloadButton);
     menuHost.append(menu, menuCue);
     inner.append(label, triggerRow, menuHost, select, statusRow, liveStatus);
     root.append(inner);
     (adapter.insert || ((control) => nativeSection.insertAdjacentElement("afterend", control)))(root);
     installObstructionAvoidance(root);
+    root.dataset.lupsMenuOpen = "false";
     choose(activeValue(state2));
     return root;
   }
@@ -4611,7 +4614,11 @@ if (hostname === 'www.walmart.ca') {
       ...dimension === "total" && requestedDimension === "auto" ? ["no comparable unit prices available"] : []
     ];
     if (excluded) summaryParts.push(promotions);
-    const visibleParts = transitional || (restored ? ["Website order", ...summaryParts] : summaryParts);
+    const visibleParts = transitional || (restored ? [
+      "Website order",
+      ...loadedProducts ? [loadedProducts] : [],
+      ...excluded ? [promotions] : []
+    ] : summaryParts);
     const announcementParts = transitional || (restored ? [
       "Website order",
       ...loadedProducts ? [loadedProducts] : [],
@@ -4624,11 +4631,11 @@ if (hostname === 'www.walmart.ca') {
     const status = root.querySelector("#lups-status");
     const visibleStatus = visibleParts.join(" \xB7 ");
     if (status.textContent !== visibleStatus) status.textContent = visibleStatus;
+    root.querySelector("#lups-menu-button").removeAttribute("title");
     const liveStatus = root.querySelector("#lups-live-status");
     const announcementStatus = announcementParts.join(" \xB7 ");
     if (liveStatus.textContent !== announcementStatus) liveStatus.textContent = announcementStatus;
-    root.querySelector("#lups-status-row").hidden = restored && !excluded;
-    root.querySelector("#lups-restore").hidden = restored || dataState === "reload-needed";
+    root.querySelector("#lups-status-row").dataset.lupsCritical = String(dataState === "reload-needed");
     root.querySelector("#lups-reload").hidden = dataState !== "reload-needed";
     root.dataset.lupsRestored = String(restored);
     root.dataset.lupsDataState = dataState || "ready";
@@ -4641,80 +4648,59 @@ if (hostname === 'www.walmart.ca') {
       style = document.createElement("style");
       style.id = "lups-styles";
       style.textContent = `
-    #lups-control[data-lups-floating="true"]{position:fixed!important;z-index:2147483646!important;right:max(18px,env(safe-area-inset-right))!important;bottom:calc(max(18px,env(safe-area-inset-bottom)) + var(--lups-obstruction-lift,0px))!important;margin:0!important;color:#17221d;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;transition:bottom .16s ease-out!important}
-    #lups-control[data-lups-floating="true"]>div{position:relative!important;display:flex!important;align-items:flex-end!important;flex-direction:column!important;gap:7px!important}
-    #lups-label{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important}
-    .lups-visually-hidden{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important}
-    .lups-trigger-row{display:flex!important;align-items:stretch!important;justify-content:flex-end!important;gap:7px!important}
-    #lups-menu-button{box-sizing:border-box!important;display:inline-flex!important;align-items:center!important;justify-content:space-between!important;gap:12px!important;min-width:220px!important;min-height:46px!important;padding:8px 12px!important;border:1px solid #9eb9a9!important;border-radius:12px!important;background:linear-gradient(180deg,#f8fcf9 0%,#edf7f0 100%)!important;color:#155f45!important;box-shadow:0 2px 7px #163f2b1a!important;font:600 14px/1.2 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif!important;white-space:nowrap!important;transition:border-color .15s ease,box-shadow .15s ease,background .15s ease!important}
-    #lups-menu-button:hover{border-color:#438a6d!important;background:#e8f5ec!important;box-shadow:0 2px 5px #163f2b1f!important}
-    #lups-menu-button[aria-expanded="true"]{border-color:#197454!important;background:#e4f3e9!important;box-shadow:0 0 0 3px #1b805326!important}
-    #lups-auto-sort,#lups-flip-direction{box-sizing:border-box!important;min-height:46px!important;padding:0 12px!important;border:1px solid #9eb9a9!important;border-radius:12px!important;background:linear-gradient(180deg,#f8fcf9 0%,#edf7f0 100%)!important;color:#155f45!important;box-shadow:0 2px 7px #163f2b1a!important;font:700 12px/1 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif!important;transition:border-color .15s ease,box-shadow .15s ease,background .15s ease!important}
-    #lups-flip-direction{width:46px!important;min-width:46px!important;padding:0!important;font-size:22px!important;font-weight:750!important}
-    #lups-auto-sort:hover,#lups-flip-direction:hover{border-color:#438a6d!important;background:#e8f5ec!important;box-shadow:0 2px 5px #163f2b1f!important}
-    #lups-auto-sort[hidden],#lups-flip-direction[hidden]{display:none!important}
-    .lups-button-copy{display:flex!important;min-width:0!important;flex:1!important;align-items:flex-start!important;flex-direction:column!important;gap:1px!important;text-align:left!important}
-    .lups-button-kicker{color:#537065!important;font-size:9.5px!important;font-weight:750!important;letter-spacing:.08em!important;line-height:1.1!important;text-transform:uppercase!important}
-    #lups-menu-button-text{max-width:190px!important;overflow:hidden!important;text-overflow:ellipsis!important}
-    .lups-menu-chevron{box-sizing:border-box!important;width:8px!important;height:8px!important;flex:0 0 auto!important;margin:0 3px 4px 0!important;border-right:2px solid #39735e!important;border-bottom:2px solid #39735e!important;transform:rotate(45deg)!important;transition:transform .15s ease,margin .15s ease!important}
-    #lups-menu-button[aria-expanded="true"] .lups-menu-chevron{margin:4px 3px 0 0!important;transform:rotate(225deg)!important}
-    #lups-status-row{box-sizing:border-box!important;display:flex!important;max-width:min(360px,calc(100vw - 24px))!important;align-items:center!important;gap:8px!important;padding:7px 8px 7px 10px!important;border:1px solid #d6e3db!important;border-radius:12px!important;background:#fffffff5!important;box-shadow:0 3px 12px #163f2b1a!important;color:#30473d!important}
-    #lups-status-row[hidden],#lups-restore[hidden],#lups-reload[hidden]{display:none!important}
-    #lups-status{min-width:0!important;flex:1!important;font:550 11.5px/1.35 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif!important;text-align:left!important}
-    #lups-restore,#lups-reload{box-sizing:border-box!important;min-height:44px!important;padding:7px 10px!important;border:1px solid #9eb9a9!important;border-radius:9px!important;background:#edf7f0!important;color:#155f45!important;font:700 11.5px/1.1 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif!important;white-space:nowrap!important}
-    #lups-restore:hover,#lups-reload:hover{border-color:#438a6d!important;background:#e4f3e9!important}
-    #lups-control[data-lups-floating="true"] [data-lups-tick][hidden]{display:none!important}
+    #lups-control[data-lups-floating="true"]{position:fixed!important;z-index:2147483646!important;right:max(18px,env(safe-area-inset-right))!important;bottom:calc(max(18px,env(safe-area-inset-bottom)) + var(--lups-obstruction-lift,0px))!important;margin:0!important;color:#273244!important;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif!important;transition:bottom .16s ease-out!important}
+    #lups-control[data-lups-floating="true"]>div{position:relative!important;display:flex!important;align-items:flex-end!important;flex-direction:column!important;gap:8px!important}
+    #lups-label,.lups-visually-hidden,.lups-button-copy{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important}
+    .lups-trigger-row{display:flex!important;align-items:center!important;justify-content:flex-end!important;gap:8px!important}
+    #lups-menu-button,#lups-flip-direction{box-sizing:border-box!important;display:grid!important;width:50px!important;min-width:50px!important;height:50px!important;min-height:50px!important;padding:0!important;place-items:center!important;border:1px solid #1e293b!important;border-radius:999px!important;background:#27364a!important;color:#fff!important;box-shadow:0 9px 24px #0f172a35,0 2px 6px #0f172a24!important;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif!important;transition:transform .16s ease,box-shadow .16s ease,background .16s ease!important}
+    #lups-menu-button:hover,#lups-menu-button[aria-expanded="true"]{background:#172033!important;box-shadow:0 12px 30px #0f172a42,0 3px 8px #0f172a2e!important;transform:translateY(-1px)!important}
+    .lups-fab-glyph{font-size:22px!important;font-weight:500!important;line-height:1!important}
+    #lups-flip-direction{width:44px!important;min-width:44px!important;height:44px!important;min-height:44px!important;border-color:#d7dee8!important;background:#fffffff5!important;color:#334155!important;box-shadow:0 5px 16px #0f172a1f,0 1px 3px #0f172a1a!important;font-size:21px!important;font-weight:650!important}
+    #lups-flip-direction:hover{border-color:#aab5c4!important;background:#f8fafc!important;transform:translateY(-1px)!important}
+    #lups-flip-direction[hidden],#lups-reload[hidden],#lups-status-row[hidden]{display:none!important}
+    #lups-status-row{position:absolute!important;right:0!important;bottom:calc(100% + 11px)!important;box-sizing:border-box!important;display:flex!important;width:max-content!important;max-width:min(340px,calc(100vw - 24px))!important;align-items:center!important;gap:9px!important;padding:9px 11px!important;border:1px solid #d8dee8!important;border-radius:12px!important;background:#fffffff8!important;box-shadow:0 10px 28px #0f172a24,0 2px 6px #0f172a14!important;color:#334155!important;opacity:0!important;visibility:hidden!important;transform:translateY(4px)!important;pointer-events:none!important;transition:opacity .14s ease,transform .14s ease,visibility .14s ease!important}
+    #lups-control[data-lups-menu-open="false"]:has(#lups-menu-button:hover) #lups-status-row[data-lups-critical="false"],#lups-control[data-lups-menu-open="false"]:has(#lups-menu-button:focus-visible) #lups-status-row[data-lups-critical="false"]{opacity:1!important;visibility:visible!important;transform:none!important}
+    #lups-status-row[data-lups-critical="true"]{position:static!important;width:min(340px,calc(100vw - 24px))!important;border-color:#e6c36a!important;background:#fffaf0!important;color:#5f4615!important;opacity:1!important;visibility:visible!important;transform:none!important;pointer-events:auto!important}
+    #lups-status{min-width:0!important;flex:1!important;font:550 11.5px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif!important;text-align:left!important}
+    #lups-reload{box-sizing:border-box!important;min-height:44px!important;padding:7px 11px!important;border:1px solid #c9a84d!important;border-radius:999px!important;background:#fff!important;color:#5f4615!important;font:700 11.5px/1.1 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif!important;white-space:nowrap!important}
+    #lups-reload:hover{background:#fff3cf!important}
     #lups-menu-host[hidden]{display:none!important}
-    #lups-menu-host{box-sizing:border-box!important;top:auto!important;right:0!important;bottom:calc(100% + 8px)!important;width:min(350px,calc(100vw - 24px))!important;min-width:0!important}
-    #lups-menu{box-sizing:border-box!important;width:100%!important;max-height:min(70vh,calc(100dvh - var(--lups-obstruction-lift,0px) - 140px),560px)!important;padding:8px!important;border:1px solid #d8e2dc!important;border-radius:14px!important;background:#fff!important;color:#17221d!important;box-shadow:0 18px 48px #14251d2e,0 3px 10px #14251d1f!important}
+    #lups-menu-host{box-sizing:border-box!important;top:auto!important;right:0!important;bottom:calc(100% + 10px)!important;width:max-content!important;min-width:0!important}
+    #lups-menu{box-sizing:border-box!important;width:max-content!important;max-width:calc(100vw - 24px)!important;max-height:min(72vh,calc(100dvh - var(--lups-obstruction-lift,0px) - 100px),540px)!important;padding:5px!important;border:0!important;border-radius:18px!important;background:transparent!important;color:#273244!important;box-shadow:none!important;scrollbar-width:thin!important}
+    #lups-menu-options{display:flex!important;align-items:flex-end!important;flex-direction:column!important;gap:7px!important}
     #lups-menu-host[data-lups-overflow="true"] #lups-menu{padding-bottom:38px!important}
-    .lups-menu-overflow-cue{position:absolute!important;right:1px!important;bottom:1px!important;left:1px!important;display:flex!important;height:38px!important;box-sizing:border-box!important;align-items:flex-end!important;justify-content:center!important;padding:13px 8px 6px!important;border-radius:0 0 13px 13px!important;background:linear-gradient(180deg,#ffffff00 0%,#fff 48%)!important;color:#39735e!important;font:700 10.5px/1.2 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif!important;letter-spacing:.02em!important;pointer-events:none!important}
+    .lups-menu-overflow-cue{position:absolute!important;right:5px!important;bottom:2px!important;display:flex!important;height:34px!important;box-sizing:border-box!important;align-items:flex-end!important;justify-content:center!important;padding:12px 10px 5px!important;border-radius:999px!important;background:linear-gradient(180deg,#ffffff00 0%,#fff 50%)!important;color:#526071!important;font:700 10px/1.2 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif!important;pointer-events:none!important}
     .lups-menu-overflow-cue[hidden]{display:none!important}
-    .lups-menu-section{display:block!important}
-    .lups-menu-group{padding:9px 8px 4px!important;color:#607068!important;font-size:10px!important;font-weight:750!important;letter-spacing:.08em!important;line-height:1!important;text-transform:uppercase!important}
-    .lups-menu-group:first-child{padding-top:5px!important}
-    .lups-menu-group-items{display:grid!important;grid-template-columns:1fr!important;gap:4px!important}
-    .lups-guide{margin:7px 2px 1px!important;padding:5px 8px 0!important;border-top:1px solid #e1e8e3!important;color:#30473d!important}
-    .lups-guide summary{box-sizing:border-box!important;display:flex!important;min-height:44px!important;align-items:center!important;justify-content:space-between!important;gap:12px!important;cursor:pointer!important;list-style:none!important;color:#24684f!important;font:700 12px/1.25 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif!important}
-    .lups-guide summary::-webkit-details-marker{display:none!important}
-    .lups-guide summary::after{content:'+'!important;display:grid!important;width:24px!important;height:24px!important;flex:0 0 auto!important;place-items:center!important;border-radius:999px!important;background:#edf7f0!important;color:#197454!important;font-size:17px!important;line-height:1!important}
-    .lups-guide[open] summary::after{content:'\u2212'!important}
-    .lups-guide p{margin:0 0 10px!important;padding:1px 2px 2px!important;color:#50645a!important;font:500 11.5px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif!important}
-    #lups-menu [data-lups-value]{box-sizing:border-box!important;display:flex!important;align-items:center!important;justify-content:space-between!important;gap:7px!important;width:100%!important;min-width:0!important;min-height:46px!important;padding:6px 8px!important;border:0!important;border-radius:9px!important;background:transparent!important;color:inherit!important;text-align:left!important;font-family:inherit!important}
-    #lups-menu [data-lups-value]:hover,#lups-menu [data-lups-value]:focus-visible{background:#f0f7f2!important}
-    #lups-menu [data-lups-value][aria-checked="true"]{background:#e4f3e9!important;color:#0e6245!important}
-    .lups-option-copy{display:flex;min-width:0;flex:1;flex-direction:column;gap:2px}
-    .lups-option-title{overflow:hidden;font-size:13px;line-height:1.2;font-weight:650;text-overflow:ellipsis;white-space:nowrap}
-    .lups-option-detail{overflow:hidden;color:#607068;font-size:11.5px;line-height:1.25;font-weight:450;text-overflow:ellipsis;white-space:nowrap}
-    #lups-menu [aria-checked="true"] .lups-option-detail{color:#39735e}
-    #lups-menu [data-lups-tick]{flex:0 0 auto;color:#197454}
-    #lups-control :focus-visible{outline:3px solid #1769aa;outline-offset:2px}
-    .lups-annotation{box-sizing:border-box!important;display:block!important;width:max-content!important;max-width:100%!important;margin:6px 0!important;padding:4px 8px!important;border:1px solid #9bc9ae!important;border-radius:999px!important;background:#edf8ef!important;color:#184d27!important;font:650 12px/1.3 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif!important}
-    .lups-annotation[data-source="calculated"]{border-color:#1769aa!important;background:#eef6fc!important;color:#164b72!important}.lups-annotation[data-source="unknown"]{border-color:#777!important;background:#f4f4f4!important;color:#555!important}
-    @media(max-width:640px){#lups-control[data-lups-floating="true"]{right:max(10px,env(safe-area-inset-right))!important;bottom:calc(max(14px,env(safe-area-inset-bottom)) + var(--lups-obstruction-lift,0px))!important}#lups-menu-button{min-width:0!important;width:196px!important;min-height:44px!important;padding:7px 10px!important;font-size:13px!important}#lups-auto-sort,#lups-flip-direction{min-height:44px!important}#lups-flip-direction{width:44px!important;min-width:44px!important}#lups-menu-button-text{max-width:160px!important}#lups-status-row{max-width:calc(100vw - 20px)!important}#lups-menu-host{position:absolute!important;right:0!important;bottom:calc(100% + 8px)!important;width:calc(100vw - 20px - env(safe-area-inset-left) - env(safe-area-inset-right))!important}#lups-menu{max-height:min(64dvh,calc(100dvh - var(--lups-obstruction-lift,0px) - 150px),520px)!important}}
+    .lups-menu-section,.lups-menu-group-items{display:contents!important}
+    .lups-menu-group{display:none!important}
+    #lups-menu [data-lups-value],#lups-default{box-sizing:border-box!important;display:flex!important;min-width:0!important;min-height:44px!important;align-items:center!important;justify-content:flex-end!important;gap:8px!important;padding:0!important;border:0!important;background:transparent!important;color:#334155!important;text-align:left!important;font-family:inherit!important;cursor:pointer!important}
+    .lups-option-copy,.lups-default-copy{box-sizing:border-box!important;display:flex!important;min-width:0!important;min-height:34px!important;align-items:center!important;padding:7px 12px!important;border:1px solid #d9e0e9!important;border-radius:999px!important;background:#fffffff7!important;box-shadow:0 4px 13px #0f172a1c,0 1px 3px #0f172a14!important;color:#344256!important;font-size:12.5px!important;font-weight:600!important;line-height:1.15!important;white-space:nowrap!important;transition:transform .14s ease,border-color .14s ease,background .14s ease!important}
+    .lups-option-title{overflow:hidden!important;font:inherit!important;text-overflow:ellipsis!important;white-space:nowrap!important}
+    .lups-option-detail{display:none!important}
+    .lups-option-icon{position:relative!important;box-sizing:border-box!important;display:grid!important;width:42px!important;min-width:42px!important;height:42px!important;place-items:center!important;border:1px solid #d7dee8!important;border-radius:999px!important;background:#fffffff8!important;box-shadow:0 5px 15px #0f172a20,0 1px 3px #0f172a18!important;color:#526071!important;font-size:11px!important;font-weight:750!important;line-height:1!important;transition:transform .14s ease,border-color .14s ease,background .14s ease!important}
+    #lups-menu [data-lups-value]:hover .lups-option-copy,#lups-menu [data-lups-value]:focus-visible .lups-option-copy,#lups-default:hover .lups-default-copy,#lups-default:focus-visible .lups-default-copy{border-color:#aeb8c6!important;background:#fff!important;transform:translateX(-2px)!important}
+    #lups-menu [data-lups-value]:hover .lups-option-icon,#lups-menu [data-lups-value]:focus-visible .lups-option-icon,#lups-default:hover .lups-option-icon,#lups-default:focus-visible .lups-option-icon{border-color:#aeb8c6!important;background:#f8fafc!important;transform:scale(1.04)!important}
+    #lups-menu [data-lups-value][aria-checked="true"] .lups-option-copy{border-color:#aeb7d8!important;background:#eef0f8!important;color:#303a68!important}
+    #lups-menu [data-lups-value][aria-checked="true"] .lups-option-icon{border-color:#27364a!important;background:#27364a!important;color:#fff!important}
+    #lups-default{margin-top:7px!important}
+    #lups-default[data-lups-saved="true"] .lups-default-copy,#lups-default[data-lups-saved="true"] .lups-option-icon{border-color:#9ca8c7!important;background:#eef0f8!important;color:#303a68!important}
+    #lups-control[data-lups-floating="true"] [data-lups-tick][hidden]{display:none!important}
+    #lups-menu [data-lups-tick]{position:absolute!important;right:-3px!important;top:-3px!important;display:grid!important;width:15px!important;height:15px!important;place-items:center!important;border:2px solid #fff!important;border-radius:999px!important;background:#6366a8!important;color:#fff!important;font-size:9px!important;line-height:1!important}
+    #lups-control :focus-visible{outline:3px solid #6476b8!important;outline-offset:3px!important}
+    .lups-annotation{box-sizing:border-box!important;display:block!important;width:max-content!important;max-width:100%!important;margin:6px 0!important;padding:4px 8px!important;border:1px solid #cbd5e1!important;border-radius:999px!important;background:#f8fafc!important;color:#334155!important;font:650 12px/1.3 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif!important}
+    .lups-annotation[data-source="calculated"]{border-color:#c7ccef!important;background:#f1f2fb!important;color:#3f477c!important}.lups-annotation[data-source="unknown"]{border-color:#d1d5db!important;background:#f7f7f8!important;color:#5f6672!important}
+    @media(max-width:640px){#lups-control[data-lups-floating="true"]{right:max(10px,env(safe-area-inset-right))!important;bottom:calc(max(14px,env(safe-area-inset-bottom)) + var(--lups-obstruction-lift,0px))!important}#lups-menu-button{width:48px!important;min-width:48px!important;height:48px!important;min-height:48px!important}#lups-status-row{max-width:calc(100vw - 20px)!important}#lups-status-row[data-lups-critical="true"]{width:calc(100vw - 20px)!important}#lups-menu-host{position:absolute!important;right:0!important;bottom:calc(100% + 8px)!important}#lups-menu{max-width:calc(100vw - 20px)!important;max-height:min(72dvh,calc(100dvh - var(--lups-obstruction-lift,0px) - 88px),520px)!important}.lups-option-copy,.lups-default-copy{max-width:calc(100vw - 78px)!important}}
     @media(forced-colors:active){
       #lups-control[data-lups-floating="true"]{color:CanvasText!important}
-      #lups-menu-button,#lups-auto-sort,#lups-flip-direction,#lups-restore,#lups-reload,#lups-status-row,#lups-menu,.lups-guide summary::after{border-color:CanvasText!important;background:Canvas!important;color:CanvasText!important;box-shadow:none!important}
-      #lups-menu [data-lups-value]{border:2px solid transparent!important;background:Canvas!important;color:CanvasText!important}
-      #lups-menu [data-lups-value][aria-checked="true"]{border-color:Highlight!important;background:Highlight!important;color:HighlightText!important}
-      #lups-menu [data-lups-value][aria-checked="true"] .lups-option-detail,#lups-menu [data-lups-value][aria-checked="true"] [data-lups-tick]{color:HighlightText!important}
-      .lups-button-kicker,.lups-option-detail,.lups-menu-group,.lups-guide,.lups-guide p,.lups-guide summary{color:CanvasText!important}
+      #lups-menu-button,#lups-flip-direction,#lups-reload,#lups-status-row,.lups-option-copy,.lups-default-copy,.lups-option-icon{border-width:2px!important;border-color:CanvasText!important;background:Canvas!important;color:CanvasText!important;box-shadow:none!important}
+      #lups-menu [data-lups-value][aria-checked="true"] .lups-option-copy,#lups-menu [data-lups-value][aria-checked="true"] .lups-option-icon{border-color:Highlight!important;background:Highlight!important;color:HighlightText!important}
       .lups-menu-overflow-cue{background:Canvas!important;color:CanvasText!important}
       .lups-annotation,.lups-annotation[data-source="calculated"],.lups-annotation[data-source="unknown"]{border-color:CanvasText!important;background:Canvas!important;color:CanvasText!important}
-      .lups-annotation{border-width:2px!important;border-style:solid!important}
-      .lups-annotation[data-source="calculated"]{border-style:dashed!important}
-      .lups-annotation[data-source="unknown"]{border-style:dotted!important}
+      .lups-annotation{border-width:2px!important;border-style:solid!important}.lups-annotation[data-source="calculated"]{border-style:dashed!important}.lups-annotation[data-source="unknown"]{border-style:dotted!important}
       #lups-control :focus-visible{outline:3px solid Highlight!important}
     }
-    @media(prefers-contrast:more){
-      #lups-menu-button,#lups-auto-sort,#lups-flip-direction,#lups-restore,#lups-reload,#lups-status-row,#lups-menu{border-width:2px!important;box-shadow:none!important}
-      #lups-menu [data-lups-value][aria-checked="true"]{outline:2px solid currentColor!important;outline-offset:-2px!important}
-      .lups-annotation{border-width:2px!important}
-      .lups-annotation[data-source="calculated"]{border-style:dashed!important}
-      .lups-annotation[data-source="unknown"]{border-style:dotted!important}
-      #lups-status{font-weight:650!important}
-    }
-    @media(prefers-reduced-motion:reduce){#lups-control[data-lups-floating="true"],#lups-menu-button,#lups-auto-sort,#lups-flip-direction,.lups-menu-chevron{transition:none!important}}
+    @media(prefers-contrast:more){#lups-menu-button,#lups-flip-direction,#lups-reload,#lups-status-row,.lups-option-copy,.lups-default-copy,.lups-option-icon{border-width:2px!important;box-shadow:none!important}.lups-annotation{border-width:2px!important}.lups-annotation[data-source="calculated"]{border-style:dashed!important}.lups-annotation[data-source="unknown"]{border-style:dotted!important}#lups-status{font-weight:650!important}}
+    @media(prefers-reduced-motion:reduce){#lups-control[data-lups-floating="true"],#lups-menu-button,#lups-flip-direction,#lups-status-row,.lups-option-copy,.lups-option-icon{transition:none!important}}
     `;
       document.head.append(style);
     }
@@ -5812,9 +5798,10 @@ if (hostname === 'www.saveonfoods.com') {
   /*!
    * Shopper-visible control and annotation renderer.
    *
-   * The menu selects a comparison basis; one adjacent arrow owns direction.
-   * Status has two layers: concise visible copy and one complete polite live
-   * announcement. Pending/no-match states explicitly preserve website order.
+   * The compact floating action menu selects a comparison basis; one adjacent
+   * arrow owns direction. Routine status is available as a hover/focus tooltip,
+   * while the missed-capture recovery remains visibly actionable. Pending and
+   * no-match states explicitly preserve website order.
    * Obstruction avoidance reads geometry only and never operates the page layer.
    */
   var LABELS = { mass: "$/kg", volume: "$/L", count: "$/each", total: "total price" };
@@ -5848,6 +5835,14 @@ if (hostname === 'www.saveonfoods.com') {
     ["mass-asc", "Compare a unit"],
     ["total-asc", "Total price"]
   ]);
+  var MENU_ICONS = {
+    restore: "\u21BA",
+    "auto-asc": "A",
+    "mass-asc": "kg",
+    "volume-asc": "L",
+    "count-asc": "#",
+    "total-asc": "$"
+  };
   var OUTSIDE_CLICK = Symbol.for("grocery-price-per-unit.outside-click.v1");
   function activeValue(state2) {
     return state2.restored ? "restore" : `${state2.dimension}-${state2.direction}`;
@@ -6010,6 +6005,7 @@ if (hostname === 'www.saveonfoods.com') {
     button.setAttribute("aria-controls", "lups-menu");
     button.setAttribute("aria-haspopup", "menu");
     button.setAttribute("aria-labelledby", "lups-label lups-menu-button-text");
+    button.setAttribute("aria-describedby", "lups-status");
     button.setAttribute("aria-expanded", "false");
     button.textContent = "";
     const buttonCopy = document.createElement("span");
@@ -6019,23 +6015,19 @@ if (hostname === 'www.saveonfoods.com') {
     buttonKicker.textContent = "Unit price";
     const buttonText = document.createElement("span");
     buttonText.id = "lups-menu-button-text";
-    const chevron = document.createElement("span");
-    chevron.className = "lups-menu-chevron";
-    chevron.setAttribute("aria-hidden", "true");
+    const fabGlyph = document.createElement("span");
+    fabGlyph.className = "lups-fab-glyph";
+    fabGlyph.setAttribute("aria-hidden", "true");
+    fabGlyph.textContent = "\u21C5";
     buttonCopy.append(buttonKicker, buttonText);
-    button.append(buttonCopy, chevron);
+    button.append(buttonCopy, fabGlyph);
     const triggerRow = document.createElement("div");
     triggerRow.className = "lups-trigger-row";
-    const autoButton = document.createElement("button");
-    autoButton.id = "lups-auto-sort";
-    autoButton.type = "button";
-    autoButton.textContent = "Auto";
-    autoButton.setAttribute("aria-label", "Sort automatically, low to high");
     const flipButton = document.createElement("button");
     flipButton.id = "lups-flip-direction";
     flipButton.type = "button";
     flipButton.hidden = true;
-    triggerRow.append(autoButton, flipButton, button);
+    triggerRow.append(flipButton, button);
     const nativeMenuList = adapter.nativeMenuList || nativeSection.querySelector('[data-testid="menu-list"]');
     const nativeMenuHost = nativeMenuList?.parentElement;
     const menuHost = document.createElement("div");
@@ -6046,22 +6038,27 @@ if (hostname === 'www.saveonfoods.com') {
     const menu = document.createElement("div");
     menu.id = "lups-menu";
     menu.className = nativeMenuList?.className || "";
+    menu.setAttribute("aria-label", "Unit price sort");
+    menu.setAttribute("aria-orientation", "vertical");
+    menu.setAttribute("role", "menu");
     menu.tabIndex = -1;
     menu.style.cssText = "opacity:1;visibility:visible;transform:none;max-height:min(70vh,560px);overflow-y:auto;";
     const menuOptions = document.createElement("div");
     menuOptions.id = "lups-menu-options";
-    menuOptions.setAttribute("aria-label", "Unit price sort");
-    menuOptions.setAttribute("role", "menu");
-    menuOptions.setAttribute("aria-orientation", "vertical");
-    const guide = document.createElement("details");
-    guide.className = "lups-guide";
-    const guideSummary = document.createElement("summary");
-    guideSummary.textContent = "How comparison works";
-    guideSummary.setAttribute("aria-expanded", "false");
-    const guideCopy = document.createElement("p");
-    guideCopy.textContent = "Automatic uses the most common comparable unit among loaded products. Use the arrow beside the selector to reverse the current sort. We never compare $/kg, $/L, and $/each. Retailer means the store supplied the unit price; Calculated uses its current price and package quantity.";
-    guide.append(guideSummary, guideCopy);
-    menu.append(menuOptions, guide);
+    menuOptions.setAttribute("role", "presentation");
+    const defaultButton = document.createElement("button");
+    defaultButton.id = "lups-default";
+    defaultButton.type = "button";
+    defaultButton.tabIndex = -1;
+    defaultButton.setAttribute("role", "menuitem");
+    const defaultCopy = document.createElement("span");
+    defaultCopy.className = "lups-default-copy";
+    const defaultIcon = document.createElement("span");
+    defaultIcon.className = "lups-option-icon";
+    defaultIcon.setAttribute("aria-hidden", "true");
+    defaultIcon.textContent = "\u2605";
+    defaultButton.append(defaultCopy, defaultIcon);
+    menu.append(menuOptions, defaultButton);
     const menuCue = document.createElement("div");
     menuCue.className = "lups-menu-overflow-cue";
     menuCue.hidden = true;
@@ -6074,7 +6071,7 @@ if (hostname === 'www.saveonfoods.com') {
     select.setAttribute("aria-hidden", "true");
     select.tabIndex = -1;
     select.hidden = true;
-    const items = () => [...menuOptions.querySelectorAll("[data-lups-value]")];
+    const items = () => [...menu.querySelectorAll('[role="menuitemradio"],[role="menuitem"]')];
     function updateMenuCue() {
       const overflow = menu.scrollHeight - menu.clientHeight > 1;
       menuHost.dataset.lupsOverflow = String(overflow);
@@ -6082,10 +6079,10 @@ if (hostname === 'www.saveonfoods.com') {
     }
     function closeMenu({ focusButton = false } = {}) {
       menuHost.hidden = true;
+      root.dataset.lupsMenuOpen = "false";
       button.setAttribute("aria-expanded", "false");
+      fabGlyph.textContent = "\u21C5";
       for (const item of items()) item.tabIndex = -1;
-      guide.open = false;
-      guideSummary.setAttribute("aria-expanded", "false");
       if (focusButton) button.focus();
     }
     function focusItem(item) {
@@ -6096,7 +6093,9 @@ if (hostname === 'www.saveonfoods.com') {
     }
     function openMenu() {
       menuHost.hidden = false;
+      root.dataset.lupsMenuOpen = "true";
       button.setAttribute("aria-expanded", "true");
+      fabGlyph.textContent = "\xD7";
       focusItem(menuOptions.querySelector(`[data-lups-value="${visibleValue(select.value)}"]`) || items()[0]);
       updateMenuCue();
     }
@@ -6107,7 +6106,6 @@ if (hostname === 'www.saveonfoods.com') {
       root.dataset.lupsMode = option[0];
       root.dataset.lupsRequestedDimension = option[2] || "";
       root.dataset.lupsDirection = option[3] || "";
-      autoButton.hidden = option[0] !== "restore";
       flipButton.hidden = option[0] === "restore";
       if (option[0] !== "restore") {
         const nextDirection = option[3] === "asc" ? "desc" : "asc";
@@ -6120,6 +6118,7 @@ if (hostname === 'www.saveonfoods.com') {
         item.setAttribute("aria-checked", String(chosen));
         item.querySelector("[data-lups-tick]")?.toggleAttribute("hidden", !chosen);
       }
+      updateDefaultAction();
       closeMenu({ focusButton });
       if (option[0] === "restore") onChange({ type: "restore" });
       else onChange({ type: "sort", dimension: option[2], direction: option[3] });
@@ -6177,14 +6176,26 @@ if (hostname === 'www.saveonfoods.com') {
       itemDetail.className = "lups-option-detail";
       itemDetail.textContent = detail;
       copy.append(itemTitle, itemDetail);
+      const icon = document.createElement("span");
+      icon.className = "lups-option-icon";
+      icon.setAttribute("aria-hidden", "true");
+      icon.textContent = MENU_ICONS[value];
       const tick = makeTick(nativeTick);
       tick.removeAttribute("data-testid");
       tick.dataset.lupsTick = "";
-      item.append(copy, tick);
+      icon.append(tick);
+      item.append(copy, icon);
       item.addEventListener("click", () => chooseMenuOption(value));
       groupItems.append(item);
     }
     select.value = activeValue(state2);
+    root.dataset.lupsDefaultMode = select.value;
+    function updateDefaultAction(saved = false) {
+      const isDefault = root.dataset.lupsDefaultMode === select.value;
+      defaultCopy.textContent = saved ? "Default saved" : isDefault ? "Current default" : "Use as default";
+      defaultButton.setAttribute("aria-label", saved ? `${buttonText.textContent} saved as this store's default` : isDefault ? `${buttonText.textContent} is this store's current default` : `Use ${buttonText.textContent} as this store's default`);
+      defaultButton.dataset.lupsSaved = String(saved);
+    }
     select.addEventListener("change", () => choose(select.value, { focusButton: true, emit: true }));
     flipButton.addEventListener("click", () => {
       const match = /^(auto|mass|volume|count|total)-(asc|desc)$/.exec(select.value);
@@ -6192,18 +6203,19 @@ if (hostname === 'www.saveonfoods.com') {
       const partner = `${match[1]}-${match[2] === "asc" ? "desc" : "asc"}`;
       choose(partner, { focusButton: true, emit: true });
     });
-    autoButton.addEventListener("click", () => choose("auto-asc", { focusButton: true, emit: true }));
+    defaultButton.addEventListener("click", () => {
+      root.dataset.lupsDefaultMode = select.value;
+      updateDefaultAction(true);
+      root.dispatchEvent(new CustomEvent("gppu:default-change", {
+        bubbles: true,
+        detail: { value: select.value }
+      }));
+      liveStatus.textContent = `${buttonText.textContent} saved as this store's default`;
+      setTimeout(() => updateDefaultAction(), 1600);
+    });
     button.addEventListener("click", () => {
       if (menuHost.hidden) openMenu();
       else closeMenu({ focusButton: true });
-    });
-    guide.addEventListener("toggle", () => {
-      guideSummary.setAttribute("aria-expanded", String(guide.open));
-      requestAnimationFrame(() => {
-        updateMenuCue();
-        if (!menuHost.hidden && guide.open) menu.scrollTop = menu.scrollHeight;
-        updateMenuCue();
-      });
     });
     menu.addEventListener("keydown", (event) => {
       const menuItems = items();
@@ -6211,19 +6223,9 @@ if (hostname === 'www.saveonfoods.com') {
       if (event.key === "Escape") {
         event.preventDefault();
         closeMenu({ focusButton: true });
-      } else if (event.key === "Tab" && document.activeElement !== guideSummary && !event.shiftKey) {
-        event.preventDefault();
-        guideSummary.focus();
-      } else if (event.key === "Tab" && document.activeElement === guideSummary && event.shiftKey) {
-        event.preventDefault();
-        focusItem(menuOptions.querySelector(`[data-lups-value="${visibleValue(select.value)}"]`) || menuItems[0]);
       } else if (event.key === "Tab") closeMenu();
       else if (event.key === "ArrowDown" || event.key === "ArrowUp") {
         event.preventDefault();
-        if (document.activeElement === guideSummary) {
-          focusItem(event.key === "ArrowUp" ? menuItems.at(-1) : menuItems[0]);
-          return;
-        }
         const delta = event.key === "ArrowDown" ? 1 : -1;
         focusItem(menuItems[(index + delta + menuItems.length) % menuItems.length]);
       } else if (event.key === "Home") {
@@ -6247,7 +6249,7 @@ if (hostname === 'www.saveonfoods.com') {
     }
     const statusRow = document.createElement("div");
     statusRow.id = "lups-status-row";
-    statusRow.hidden = true;
+    statusRow.setAttribute("role", "tooltip");
     const status = document.createElement("span");
     status.id = "lups-status";
     const liveStatus = document.createElement("output");
@@ -6255,13 +6257,6 @@ if (hostname === 'www.saveonfoods.com') {
     liveStatus.className = "lups-visually-hidden";
     liveStatus.setAttribute("aria-live", "polite");
     liveStatus.setAttribute("aria-atomic", "true");
-    const restoreButton = document.createElement("button");
-    restoreButton.id = "lups-restore";
-    restoreButton.type = "button";
-    restoreButton.textContent = "Restore";
-    restoreButton.setAttribute("aria-label", "Restore website order");
-    restoreButton.hidden = true;
-    restoreButton.addEventListener("click", () => choose("restore", { focusButton: true, emit: true }));
     const reloadButton = document.createElement("button");
     reloadButton.id = "lups-reload";
     reloadButton.type = "button";
@@ -6269,12 +6264,13 @@ if (hostname === 'www.saveonfoods.com') {
     reloadButton.setAttribute("aria-label", "Reload page to capture current product data");
     reloadButton.hidden = true;
     reloadButton.addEventListener("click", () => onChange({ type: "reload" }));
-    statusRow.append(status, restoreButton, reloadButton);
+    statusRow.append(status, reloadButton);
     menuHost.append(menu, menuCue);
     inner.append(label, triggerRow, menuHost, select, statusRow, liveStatus);
     root.append(inner);
     (adapter.insert || ((control) => nativeSection.insertAdjacentElement("afterend", control)))(root);
     installObstructionAvoidance(root);
+    root.dataset.lupsMenuOpen = "false";
     choose(activeValue(state2));
     return root;
   }
@@ -6312,7 +6308,11 @@ if (hostname === 'www.saveonfoods.com') {
       ...dimension === "total" && requestedDimension === "auto" ? ["no comparable unit prices available"] : []
     ];
     if (excluded) summaryParts.push(promotions);
-    const visibleParts = transitional || (restored ? ["Website order", ...summaryParts] : summaryParts);
+    const visibleParts = transitional || (restored ? [
+      "Website order",
+      ...loadedProducts ? [loadedProducts] : [],
+      ...excluded ? [promotions] : []
+    ] : summaryParts);
     const announcementParts = transitional || (restored ? [
       "Website order",
       ...loadedProducts ? [loadedProducts] : [],
@@ -6325,11 +6325,11 @@ if (hostname === 'www.saveonfoods.com') {
     const status = root.querySelector("#lups-status");
     const visibleStatus = visibleParts.join(" \xB7 ");
     if (status.textContent !== visibleStatus) status.textContent = visibleStatus;
+    root.querySelector("#lups-menu-button").removeAttribute("title");
     const liveStatus = root.querySelector("#lups-live-status");
     const announcementStatus = announcementParts.join(" \xB7 ");
     if (liveStatus.textContent !== announcementStatus) liveStatus.textContent = announcementStatus;
-    root.querySelector("#lups-status-row").hidden = restored && !excluded;
-    root.querySelector("#lups-restore").hidden = restored || dataState === "reload-needed";
+    root.querySelector("#lups-status-row").dataset.lupsCritical = String(dataState === "reload-needed");
     root.querySelector("#lups-reload").hidden = dataState !== "reload-needed";
     root.dataset.lupsRestored = String(restored);
     root.dataset.lupsDataState = dataState || "ready";
@@ -6366,80 +6366,59 @@ if (hostname === 'www.saveonfoods.com') {
       style = document.createElement("style");
       style.id = "lups-styles";
       style.textContent = `
-    #lups-control[data-lups-floating="true"]{position:fixed!important;z-index:2147483646!important;right:max(18px,env(safe-area-inset-right))!important;bottom:calc(max(18px,env(safe-area-inset-bottom)) + var(--lups-obstruction-lift,0px))!important;margin:0!important;color:#17221d;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;transition:bottom .16s ease-out!important}
-    #lups-control[data-lups-floating="true"]>div{position:relative!important;display:flex!important;align-items:flex-end!important;flex-direction:column!important;gap:7px!important}
-    #lups-label{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important}
-    .lups-visually-hidden{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important}
-    .lups-trigger-row{display:flex!important;align-items:stretch!important;justify-content:flex-end!important;gap:7px!important}
-    #lups-menu-button{box-sizing:border-box!important;display:inline-flex!important;align-items:center!important;justify-content:space-between!important;gap:12px!important;min-width:220px!important;min-height:46px!important;padding:8px 12px!important;border:1px solid #9eb9a9!important;border-radius:12px!important;background:linear-gradient(180deg,#f8fcf9 0%,#edf7f0 100%)!important;color:#155f45!important;box-shadow:0 2px 7px #163f2b1a!important;font:600 14px/1.2 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif!important;white-space:nowrap!important;transition:border-color .15s ease,box-shadow .15s ease,background .15s ease!important}
-    #lups-menu-button:hover{border-color:#438a6d!important;background:#e8f5ec!important;box-shadow:0 2px 5px #163f2b1f!important}
-    #lups-menu-button[aria-expanded="true"]{border-color:#197454!important;background:#e4f3e9!important;box-shadow:0 0 0 3px #1b805326!important}
-    #lups-auto-sort,#lups-flip-direction{box-sizing:border-box!important;min-height:46px!important;padding:0 12px!important;border:1px solid #9eb9a9!important;border-radius:12px!important;background:linear-gradient(180deg,#f8fcf9 0%,#edf7f0 100%)!important;color:#155f45!important;box-shadow:0 2px 7px #163f2b1a!important;font:700 12px/1 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif!important;transition:border-color .15s ease,box-shadow .15s ease,background .15s ease!important}
-    #lups-flip-direction{width:46px!important;min-width:46px!important;padding:0!important;font-size:22px!important;font-weight:750!important}
-    #lups-auto-sort:hover,#lups-flip-direction:hover{border-color:#438a6d!important;background:#e8f5ec!important;box-shadow:0 2px 5px #163f2b1f!important}
-    #lups-auto-sort[hidden],#lups-flip-direction[hidden]{display:none!important}
-    .lups-button-copy{display:flex!important;min-width:0!important;flex:1!important;align-items:flex-start!important;flex-direction:column!important;gap:1px!important;text-align:left!important}
-    .lups-button-kicker{color:#537065!important;font-size:9.5px!important;font-weight:750!important;letter-spacing:.08em!important;line-height:1.1!important;text-transform:uppercase!important}
-    #lups-menu-button-text{max-width:190px!important;overflow:hidden!important;text-overflow:ellipsis!important}
-    .lups-menu-chevron{box-sizing:border-box!important;width:8px!important;height:8px!important;flex:0 0 auto!important;margin:0 3px 4px 0!important;border-right:2px solid #39735e!important;border-bottom:2px solid #39735e!important;transform:rotate(45deg)!important;transition:transform .15s ease,margin .15s ease!important}
-    #lups-menu-button[aria-expanded="true"] .lups-menu-chevron{margin:4px 3px 0 0!important;transform:rotate(225deg)!important}
-    #lups-status-row{box-sizing:border-box!important;display:flex!important;max-width:min(360px,calc(100vw - 24px))!important;align-items:center!important;gap:8px!important;padding:7px 8px 7px 10px!important;border:1px solid #d6e3db!important;border-radius:12px!important;background:#fffffff5!important;box-shadow:0 3px 12px #163f2b1a!important;color:#30473d!important}
-    #lups-status-row[hidden],#lups-restore[hidden],#lups-reload[hidden]{display:none!important}
-    #lups-status{min-width:0!important;flex:1!important;font:550 11.5px/1.35 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif!important;text-align:left!important}
-    #lups-restore,#lups-reload{box-sizing:border-box!important;min-height:44px!important;padding:7px 10px!important;border:1px solid #9eb9a9!important;border-radius:9px!important;background:#edf7f0!important;color:#155f45!important;font:700 11.5px/1.1 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif!important;white-space:nowrap!important}
-    #lups-restore:hover,#lups-reload:hover{border-color:#438a6d!important;background:#e4f3e9!important}
-    #lups-control[data-lups-floating="true"] [data-lups-tick][hidden]{display:none!important}
+    #lups-control[data-lups-floating="true"]{position:fixed!important;z-index:2147483646!important;right:max(18px,env(safe-area-inset-right))!important;bottom:calc(max(18px,env(safe-area-inset-bottom)) + var(--lups-obstruction-lift,0px))!important;margin:0!important;color:#273244!important;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif!important;transition:bottom .16s ease-out!important}
+    #lups-control[data-lups-floating="true"]>div{position:relative!important;display:flex!important;align-items:flex-end!important;flex-direction:column!important;gap:8px!important}
+    #lups-label,.lups-visually-hidden,.lups-button-copy{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important}
+    .lups-trigger-row{display:flex!important;align-items:center!important;justify-content:flex-end!important;gap:8px!important}
+    #lups-menu-button,#lups-flip-direction{box-sizing:border-box!important;display:grid!important;width:50px!important;min-width:50px!important;height:50px!important;min-height:50px!important;padding:0!important;place-items:center!important;border:1px solid #1e293b!important;border-radius:999px!important;background:#27364a!important;color:#fff!important;box-shadow:0 9px 24px #0f172a35,0 2px 6px #0f172a24!important;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif!important;transition:transform .16s ease,box-shadow .16s ease,background .16s ease!important}
+    #lups-menu-button:hover,#lups-menu-button[aria-expanded="true"]{background:#172033!important;box-shadow:0 12px 30px #0f172a42,0 3px 8px #0f172a2e!important;transform:translateY(-1px)!important}
+    .lups-fab-glyph{font-size:22px!important;font-weight:500!important;line-height:1!important}
+    #lups-flip-direction{width:44px!important;min-width:44px!important;height:44px!important;min-height:44px!important;border-color:#d7dee8!important;background:#fffffff5!important;color:#334155!important;box-shadow:0 5px 16px #0f172a1f,0 1px 3px #0f172a1a!important;font-size:21px!important;font-weight:650!important}
+    #lups-flip-direction:hover{border-color:#aab5c4!important;background:#f8fafc!important;transform:translateY(-1px)!important}
+    #lups-flip-direction[hidden],#lups-reload[hidden],#lups-status-row[hidden]{display:none!important}
+    #lups-status-row{position:absolute!important;right:0!important;bottom:calc(100% + 11px)!important;box-sizing:border-box!important;display:flex!important;width:max-content!important;max-width:min(340px,calc(100vw - 24px))!important;align-items:center!important;gap:9px!important;padding:9px 11px!important;border:1px solid #d8dee8!important;border-radius:12px!important;background:#fffffff8!important;box-shadow:0 10px 28px #0f172a24,0 2px 6px #0f172a14!important;color:#334155!important;opacity:0!important;visibility:hidden!important;transform:translateY(4px)!important;pointer-events:none!important;transition:opacity .14s ease,transform .14s ease,visibility .14s ease!important}
+    #lups-control[data-lups-menu-open="false"]:has(#lups-menu-button:hover) #lups-status-row[data-lups-critical="false"],#lups-control[data-lups-menu-open="false"]:has(#lups-menu-button:focus-visible) #lups-status-row[data-lups-critical="false"]{opacity:1!important;visibility:visible!important;transform:none!important}
+    #lups-status-row[data-lups-critical="true"]{position:static!important;width:min(340px,calc(100vw - 24px))!important;border-color:#e6c36a!important;background:#fffaf0!important;color:#5f4615!important;opacity:1!important;visibility:visible!important;transform:none!important;pointer-events:auto!important}
+    #lups-status{min-width:0!important;flex:1!important;font:550 11.5px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif!important;text-align:left!important}
+    #lups-reload{box-sizing:border-box!important;min-height:44px!important;padding:7px 11px!important;border:1px solid #c9a84d!important;border-radius:999px!important;background:#fff!important;color:#5f4615!important;font:700 11.5px/1.1 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif!important;white-space:nowrap!important}
+    #lups-reload:hover{background:#fff3cf!important}
     #lups-menu-host[hidden]{display:none!important}
-    #lups-menu-host{box-sizing:border-box!important;top:auto!important;right:0!important;bottom:calc(100% + 8px)!important;width:min(350px,calc(100vw - 24px))!important;min-width:0!important}
-    #lups-menu{box-sizing:border-box!important;width:100%!important;max-height:min(70vh,calc(100dvh - var(--lups-obstruction-lift,0px) - 140px),560px)!important;padding:8px!important;border:1px solid #d8e2dc!important;border-radius:14px!important;background:#fff!important;color:#17221d!important;box-shadow:0 18px 48px #14251d2e,0 3px 10px #14251d1f!important}
+    #lups-menu-host{box-sizing:border-box!important;top:auto!important;right:0!important;bottom:calc(100% + 10px)!important;width:max-content!important;min-width:0!important}
+    #lups-menu{box-sizing:border-box!important;width:max-content!important;max-width:calc(100vw - 24px)!important;max-height:min(72vh,calc(100dvh - var(--lups-obstruction-lift,0px) - 100px),540px)!important;padding:5px!important;border:0!important;border-radius:18px!important;background:transparent!important;color:#273244!important;box-shadow:none!important;scrollbar-width:thin!important}
+    #lups-menu-options{display:flex!important;align-items:flex-end!important;flex-direction:column!important;gap:7px!important}
     #lups-menu-host[data-lups-overflow="true"] #lups-menu{padding-bottom:38px!important}
-    .lups-menu-overflow-cue{position:absolute!important;right:1px!important;bottom:1px!important;left:1px!important;display:flex!important;height:38px!important;box-sizing:border-box!important;align-items:flex-end!important;justify-content:center!important;padding:13px 8px 6px!important;border-radius:0 0 13px 13px!important;background:linear-gradient(180deg,#ffffff00 0%,#fff 48%)!important;color:#39735e!important;font:700 10.5px/1.2 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif!important;letter-spacing:.02em!important;pointer-events:none!important}
+    .lups-menu-overflow-cue{position:absolute!important;right:5px!important;bottom:2px!important;display:flex!important;height:34px!important;box-sizing:border-box!important;align-items:flex-end!important;justify-content:center!important;padding:12px 10px 5px!important;border-radius:999px!important;background:linear-gradient(180deg,#ffffff00 0%,#fff 50%)!important;color:#526071!important;font:700 10px/1.2 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif!important;pointer-events:none!important}
     .lups-menu-overflow-cue[hidden]{display:none!important}
-    .lups-menu-section{display:block!important}
-    .lups-menu-group{padding:9px 8px 4px!important;color:#607068!important;font-size:10px!important;font-weight:750!important;letter-spacing:.08em!important;line-height:1!important;text-transform:uppercase!important}
-    .lups-menu-group:first-child{padding-top:5px!important}
-    .lups-menu-group-items{display:grid!important;grid-template-columns:1fr!important;gap:4px!important}
-    .lups-guide{margin:7px 2px 1px!important;padding:5px 8px 0!important;border-top:1px solid #e1e8e3!important;color:#30473d!important}
-    .lups-guide summary{box-sizing:border-box!important;display:flex!important;min-height:44px!important;align-items:center!important;justify-content:space-between!important;gap:12px!important;cursor:pointer!important;list-style:none!important;color:#24684f!important;font:700 12px/1.25 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif!important}
-    .lups-guide summary::-webkit-details-marker{display:none!important}
-    .lups-guide summary::after{content:'+'!important;display:grid!important;width:24px!important;height:24px!important;flex:0 0 auto!important;place-items:center!important;border-radius:999px!important;background:#edf7f0!important;color:#197454!important;font-size:17px!important;line-height:1!important}
-    .lups-guide[open] summary::after{content:'\u2212'!important}
-    .lups-guide p{margin:0 0 10px!important;padding:1px 2px 2px!important;color:#50645a!important;font:500 11.5px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif!important}
-    #lups-menu [data-lups-value]{box-sizing:border-box!important;display:flex!important;align-items:center!important;justify-content:space-between!important;gap:7px!important;width:100%!important;min-width:0!important;min-height:46px!important;padding:6px 8px!important;border:0!important;border-radius:9px!important;background:transparent!important;color:inherit!important;text-align:left!important;font-family:inherit!important}
-    #lups-menu [data-lups-value]:hover,#lups-menu [data-lups-value]:focus-visible{background:#f0f7f2!important}
-    #lups-menu [data-lups-value][aria-checked="true"]{background:#e4f3e9!important;color:#0e6245!important}
-    .lups-option-copy{display:flex;min-width:0;flex:1;flex-direction:column;gap:2px}
-    .lups-option-title{overflow:hidden;font-size:13px;line-height:1.2;font-weight:650;text-overflow:ellipsis;white-space:nowrap}
-    .lups-option-detail{overflow:hidden;color:#607068;font-size:11.5px;line-height:1.25;font-weight:450;text-overflow:ellipsis;white-space:nowrap}
-    #lups-menu [aria-checked="true"] .lups-option-detail{color:#39735e}
-    #lups-menu [data-lups-tick]{flex:0 0 auto;color:#197454}
-    #lups-control :focus-visible{outline:3px solid #1769aa;outline-offset:2px}
-    .lups-annotation{box-sizing:border-box!important;display:block!important;width:max-content!important;max-width:100%!important;margin:6px 0!important;padding:4px 8px!important;border:1px solid #9bc9ae!important;border-radius:999px!important;background:#edf8ef!important;color:#184d27!important;font:650 12px/1.3 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif!important}
-    .lups-annotation[data-source="calculated"]{border-color:#1769aa!important;background:#eef6fc!important;color:#164b72!important}.lups-annotation[data-source="unknown"]{border-color:#777!important;background:#f4f4f4!important;color:#555!important}
-    @media(max-width:640px){#lups-control[data-lups-floating="true"]{right:max(10px,env(safe-area-inset-right))!important;bottom:calc(max(14px,env(safe-area-inset-bottom)) + var(--lups-obstruction-lift,0px))!important}#lups-menu-button{min-width:0!important;width:196px!important;min-height:44px!important;padding:7px 10px!important;font-size:13px!important}#lups-auto-sort,#lups-flip-direction{min-height:44px!important}#lups-flip-direction{width:44px!important;min-width:44px!important}#lups-menu-button-text{max-width:160px!important}#lups-status-row{max-width:calc(100vw - 20px)!important}#lups-menu-host{position:absolute!important;right:0!important;bottom:calc(100% + 8px)!important;width:calc(100vw - 20px - env(safe-area-inset-left) - env(safe-area-inset-right))!important}#lups-menu{max-height:min(64dvh,calc(100dvh - var(--lups-obstruction-lift,0px) - 150px),520px)!important}}
+    .lups-menu-section,.lups-menu-group-items{display:contents!important}
+    .lups-menu-group{display:none!important}
+    #lups-menu [data-lups-value],#lups-default{box-sizing:border-box!important;display:flex!important;min-width:0!important;min-height:44px!important;align-items:center!important;justify-content:flex-end!important;gap:8px!important;padding:0!important;border:0!important;background:transparent!important;color:#334155!important;text-align:left!important;font-family:inherit!important;cursor:pointer!important}
+    .lups-option-copy,.lups-default-copy{box-sizing:border-box!important;display:flex!important;min-width:0!important;min-height:34px!important;align-items:center!important;padding:7px 12px!important;border:1px solid #d9e0e9!important;border-radius:999px!important;background:#fffffff7!important;box-shadow:0 4px 13px #0f172a1c,0 1px 3px #0f172a14!important;color:#344256!important;font-size:12.5px!important;font-weight:600!important;line-height:1.15!important;white-space:nowrap!important;transition:transform .14s ease,border-color .14s ease,background .14s ease!important}
+    .lups-option-title{overflow:hidden!important;font:inherit!important;text-overflow:ellipsis!important;white-space:nowrap!important}
+    .lups-option-detail{display:none!important}
+    .lups-option-icon{position:relative!important;box-sizing:border-box!important;display:grid!important;width:42px!important;min-width:42px!important;height:42px!important;place-items:center!important;border:1px solid #d7dee8!important;border-radius:999px!important;background:#fffffff8!important;box-shadow:0 5px 15px #0f172a20,0 1px 3px #0f172a18!important;color:#526071!important;font-size:11px!important;font-weight:750!important;line-height:1!important;transition:transform .14s ease,border-color .14s ease,background .14s ease!important}
+    #lups-menu [data-lups-value]:hover .lups-option-copy,#lups-menu [data-lups-value]:focus-visible .lups-option-copy,#lups-default:hover .lups-default-copy,#lups-default:focus-visible .lups-default-copy{border-color:#aeb8c6!important;background:#fff!important;transform:translateX(-2px)!important}
+    #lups-menu [data-lups-value]:hover .lups-option-icon,#lups-menu [data-lups-value]:focus-visible .lups-option-icon,#lups-default:hover .lups-option-icon,#lups-default:focus-visible .lups-option-icon{border-color:#aeb8c6!important;background:#f8fafc!important;transform:scale(1.04)!important}
+    #lups-menu [data-lups-value][aria-checked="true"] .lups-option-copy{border-color:#aeb7d8!important;background:#eef0f8!important;color:#303a68!important}
+    #lups-menu [data-lups-value][aria-checked="true"] .lups-option-icon{border-color:#27364a!important;background:#27364a!important;color:#fff!important}
+    #lups-default{margin-top:7px!important}
+    #lups-default[data-lups-saved="true"] .lups-default-copy,#lups-default[data-lups-saved="true"] .lups-option-icon{border-color:#9ca8c7!important;background:#eef0f8!important;color:#303a68!important}
+    #lups-control[data-lups-floating="true"] [data-lups-tick][hidden]{display:none!important}
+    #lups-menu [data-lups-tick]{position:absolute!important;right:-3px!important;top:-3px!important;display:grid!important;width:15px!important;height:15px!important;place-items:center!important;border:2px solid #fff!important;border-radius:999px!important;background:#6366a8!important;color:#fff!important;font-size:9px!important;line-height:1!important}
+    #lups-control :focus-visible{outline:3px solid #6476b8!important;outline-offset:3px!important}
+    .lups-annotation{box-sizing:border-box!important;display:block!important;width:max-content!important;max-width:100%!important;margin:6px 0!important;padding:4px 8px!important;border:1px solid #cbd5e1!important;border-radius:999px!important;background:#f8fafc!important;color:#334155!important;font:650 12px/1.3 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif!important}
+    .lups-annotation[data-source="calculated"]{border-color:#c7ccef!important;background:#f1f2fb!important;color:#3f477c!important}.lups-annotation[data-source="unknown"]{border-color:#d1d5db!important;background:#f7f7f8!important;color:#5f6672!important}
+    @media(max-width:640px){#lups-control[data-lups-floating="true"]{right:max(10px,env(safe-area-inset-right))!important;bottom:calc(max(14px,env(safe-area-inset-bottom)) + var(--lups-obstruction-lift,0px))!important}#lups-menu-button{width:48px!important;min-width:48px!important;height:48px!important;min-height:48px!important}#lups-status-row{max-width:calc(100vw - 20px)!important}#lups-status-row[data-lups-critical="true"]{width:calc(100vw - 20px)!important}#lups-menu-host{position:absolute!important;right:0!important;bottom:calc(100% + 8px)!important}#lups-menu{max-width:calc(100vw - 20px)!important;max-height:min(72dvh,calc(100dvh - var(--lups-obstruction-lift,0px) - 88px),520px)!important}.lups-option-copy,.lups-default-copy{max-width:calc(100vw - 78px)!important}}
     @media(forced-colors:active){
       #lups-control[data-lups-floating="true"]{color:CanvasText!important}
-      #lups-menu-button,#lups-auto-sort,#lups-flip-direction,#lups-restore,#lups-reload,#lups-status-row,#lups-menu,.lups-guide summary::after{border-color:CanvasText!important;background:Canvas!important;color:CanvasText!important;box-shadow:none!important}
-      #lups-menu [data-lups-value]{border:2px solid transparent!important;background:Canvas!important;color:CanvasText!important}
-      #lups-menu [data-lups-value][aria-checked="true"]{border-color:Highlight!important;background:Highlight!important;color:HighlightText!important}
-      #lups-menu [data-lups-value][aria-checked="true"] .lups-option-detail,#lups-menu [data-lups-value][aria-checked="true"] [data-lups-tick]{color:HighlightText!important}
-      .lups-button-kicker,.lups-option-detail,.lups-menu-group,.lups-guide,.lups-guide p,.lups-guide summary{color:CanvasText!important}
+      #lups-menu-button,#lups-flip-direction,#lups-reload,#lups-status-row,.lups-option-copy,.lups-default-copy,.lups-option-icon{border-width:2px!important;border-color:CanvasText!important;background:Canvas!important;color:CanvasText!important;box-shadow:none!important}
+      #lups-menu [data-lups-value][aria-checked="true"] .lups-option-copy,#lups-menu [data-lups-value][aria-checked="true"] .lups-option-icon{border-color:Highlight!important;background:Highlight!important;color:HighlightText!important}
       .lups-menu-overflow-cue{background:Canvas!important;color:CanvasText!important}
       .lups-annotation,.lups-annotation[data-source="calculated"],.lups-annotation[data-source="unknown"]{border-color:CanvasText!important;background:Canvas!important;color:CanvasText!important}
-      .lups-annotation{border-width:2px!important;border-style:solid!important}
-      .lups-annotation[data-source="calculated"]{border-style:dashed!important}
-      .lups-annotation[data-source="unknown"]{border-style:dotted!important}
+      .lups-annotation{border-width:2px!important;border-style:solid!important}.lups-annotation[data-source="calculated"]{border-style:dashed!important}.lups-annotation[data-source="unknown"]{border-style:dotted!important}
       #lups-control :focus-visible{outline:3px solid Highlight!important}
     }
-    @media(prefers-contrast:more){
-      #lups-menu-button,#lups-auto-sort,#lups-flip-direction,#lups-restore,#lups-reload,#lups-status-row,#lups-menu{border-width:2px!important;box-shadow:none!important}
-      #lups-menu [data-lups-value][aria-checked="true"]{outline:2px solid currentColor!important;outline-offset:-2px!important}
-      .lups-annotation{border-width:2px!important}
-      .lups-annotation[data-source="calculated"]{border-style:dashed!important}
-      .lups-annotation[data-source="unknown"]{border-style:dotted!important}
-      #lups-status{font-weight:650!important}
-    }
-    @media(prefers-reduced-motion:reduce){#lups-control[data-lups-floating="true"],#lups-menu-button,#lups-auto-sort,#lups-flip-direction,.lups-menu-chevron{transition:none!important}}
+    @media(prefers-contrast:more){#lups-menu-button,#lups-flip-direction,#lups-reload,#lups-status-row,.lups-option-copy,.lups-default-copy,.lups-option-icon{border-width:2px!important;box-shadow:none!important}.lups-annotation{border-width:2px!important}.lups-annotation[data-source="calculated"]{border-style:dashed!important}.lups-annotation[data-source="unknown"]{border-style:dotted!important}#lups-status{font-weight:650!important}}
+    @media(prefers-reduced-motion:reduce){#lups-control[data-lups-floating="true"],#lups-menu-button,#lups-flip-direction,#lups-status-row,.lups-option-copy,.lups-option-icon{transition:none!important}}
     `;
       document.head.append(style);
     }
@@ -6856,10 +6835,10 @@ if (hostname === 'www.saveonfoods.com') {
 })();
 }
 
-  /* Persist only validated in-page mode changes. A descending mode remains a
-   * valid stored preference even though direction is changed through the
-   * dedicated arrow rather than duplicated menu entries. */
-  document.addEventListener('gppu:mode-change', (event) => {
+  /* The selected mode affects only the current page until the shopper explicitly
+   * chooses “Use as default”. The namespaced local preference is deliberately
+   * scoped to each retailer origin; unrelated sites cannot read it. */
+  document.addEventListener('gppu:default-change', (event) => {
     const value = event.detail?.value;
     if (!/^(restore|(auto|mass|volume|count|total)-(asc|desc))$/.test(value || '')) return;
     write('sync', 'defaultSortMode', value);

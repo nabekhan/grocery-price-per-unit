@@ -113,12 +113,14 @@ for (const storefront of [
       await expect(page.locator(`[data-fixture-id="${id}"]`)).toBeVisible();
     }
 
-    await page.locator('#lups-auto-sort').click();
-    await page.locator('#lups-restore').click();
+    await choose(page, 'auto-asc');
+    await choose(page, 'restore');
     await expect(recognized).toHaveCSS('display', 'none');
+    await page.locator('#lups-menu-button').hover();
     await expect(page.locator('#lups-status-row')).toBeVisible();
-    await expect(page.locator('#lups-status')).toHaveText('Website order · 1 sponsored/ad tile hidden');
-    await expect(page.locator('#lups-restore')).toBeHidden();
+    await expect(page.locator('#lups-status')).toHaveText('Website order · 19 loaded products · 1 sponsored/ad tile hidden');
+    await expect(page.locator('#lups-menu-button')).not.toHaveAttribute('title');
+    await expect(page.locator('#lups-restore')).toHaveCount(0);
     await page.setViewportSize({ width: 320, height: 700 });
     expect(await page.locator('#lups-status-row').evaluate((row) => {
       const box = row.getBoundingClientRect();
@@ -133,6 +135,7 @@ for (const storefront of [
     await recognized.locator('span', { hasText: /^ Sponsored $/ }).evaluate((marker) => marker.remove());
     await expect(recognized).toHaveCSS('display', 'grid');
     await expect(recognized.locator('[data-lups-annotation]')).toHaveText('$3.00/kg · Calculated');
+    await page.locator('h1').click();
     await expect(page.locator('#lups-status-row')).toBeHidden();
     await expect(page.locator('#lups-status')).not.toContainText('sponsored/ad tile hidden');
 
@@ -201,9 +204,8 @@ test('sorts, reverses, restores, and incorporates appended products', async ({ p
   const calculatedAnnotation = page.locator('[data-fixture-id="mass-sale"] [data-lups-annotation]');
   await expect(calculatedAnnotation).toHaveText('$2.00/kg · Calculated');
   await expect(calculatedAnnotation).toHaveAttribute('aria-label', '$2.00 per kilogram, calculated from retailer API package and price data');
-  await expect(control.locator('#lups-status')).toBeVisible();
-  await expect(page.locator('#lups-restore')).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Restore website order' })).toBeVisible();
+  await expect(control.locator('#lups-status')).toContainText('3 comparable');
+  await expect(page.locator('#lups-restore')).toHaveCount(0);
   await expect(page.locator('#lups-flip-direction')).toBeVisible();
   await expect(page.locator('#lups-flip-direction')).toHaveAttribute('aria-label', 'Reverse unit-price order to high to low');
 
@@ -234,11 +236,12 @@ test('sorts, reverses, restores, and incorporates appended products', async ({ p
   expect((await visualOrder()).slice(0, 4)).toEqual(['weighted', 'mass-explicit', 'mass-sale', 'appended']);
   await expect(page.locator('#lups-control')).toHaveCount(1);
 
-  await page.locator('#lups-restore').click();
+  await choose(page, 'restore');
   await expect(control.locator('#lups-live-status')).toContainText('Website order · 9 loaded products');
-  await expect(page.locator('#lups-status-row')).toBeHidden();
+  await page.locator('#lups-menu-button').hover();
+  await expect(page.locator('#lups-status-row')).toBeVisible();
   await expect(page.locator('#lups-flip-direction')).toBeHidden();
-  await expect(page.locator('#lups-restore')).toBeHidden();
+  await expect(page.locator('#lups-restore')).toHaveCount(0);
   expect(await page.locator('#grid > div').evaluateAll((cards) => cards.every((card) => !card.style.order))).toBe(true);
   expect(scriptErrors).toEqual([]);
 });
@@ -326,109 +329,51 @@ test('fits a narrow mobile viewport and remains keyboard accessible', async ({ p
   await page.setViewportSize({ width: 390, height: 844 });
   await openFixture(page);
   await install(page);
-  await page.locator('#lups-menu-button').focus();
-  await expect(page.locator('#lups-menu-button')).toBeFocused();
-  await expect(page.locator('#lups-menu-button')).toHaveAttribute('aria-haspopup', 'menu');
-  await expect(page.locator('#lups-menu-button')).toHaveAttribute('aria-controls', 'lups-menu');
-  await expect(page.locator('#lups-menu-button')).toHaveAccessibleName('Unit price Website order');
-  await expect(page.locator('#lups-control').getByRole('status')).toHaveCount(1);
+  const trigger = page.locator('#lups-menu-button');
+  await trigger.focus();
+  await expect(trigger).toBeFocused();
+  await expect(trigger).toHaveAttribute('aria-haspopup', 'menu');
+  await expect(trigger).toHaveAttribute('aria-controls', 'lups-menu');
+  await expect(trigger).toHaveAttribute('aria-describedby', 'lups-status');
+  await expect(trigger).toHaveAccessibleName('Unit price Website order');
+  expect((await trigger.boundingBox()).width).toBeGreaterThanOrEqual(44);
+  expect((await trigger.boundingBox()).height).toBeGreaterThanOrEqual(44);
+  await expect(page.locator('#lups-status-row')).toBeVisible();
   await page.keyboard.press('Enter');
-  await expect(page.locator('#lups-menu-button')).toHaveAttribute('aria-expanded', 'true');
+  await expect(trigger).toHaveAttribute('aria-expanded', 'true');
   await expect(page.getByRole('menuitemradio', { name: 'Website order, Keep the retailer’s current order' })).toBeFocused();
   await expect(page.locator('[role="menuitemradio"][aria-checked="true"]')).toHaveCount(1);
-  await page.keyboard.press('Escape');
-  await expect(page.locator('#lups-menu-button')).toHaveAttribute('aria-expanded', 'false');
-  await expect(page.locator('#lups-menu-button')).toBeFocused();
-  await page.keyboard.press('Space');
-  await expect(page.locator('#lups-menu-button')).toHaveAttribute('aria-expanded', 'true');
-  await expect(page.getByRole('menuitemradio', { name: 'Website order, Keep the retailer’s current order' })).toBeFocused();
-  await page.keyboard.press('Escape');
-  const autoButton = page.locator('#lups-auto-sort');
-  await expect(autoButton).toBeVisible();
-  await expect(autoButton).toHaveAttribute('aria-label', 'Sort automatically, low to high');
-  expect((await autoButton.boundingBox()).height).toBeGreaterThanOrEqual(44);
-  await autoButton.focus();
-  await page.keyboard.press('Enter');
-  await expect(page.locator('#lups-menu-button')).toBeFocused();
-  await expect(page.locator('#lups-mode')).toHaveValue('auto-asc');
-  await expect(autoButton).toBeHidden();
-  await expect(page.locator('#lups-menu-button')).toHaveAccessibleName('Unit price Auto · $/kg · Low → high');
-  await page.locator('#lups-restore').click();
-  await expect(autoButton).toBeVisible();
-  await page.locator('#lups-menu-button').click();
-  await expect(page.locator('.lups-menu-group')).toHaveCount(4);
-  await expect(page.locator('.lups-menu-section')).toHaveCount(4);
-  await expect(page.locator('.lups-menu-group-items')).toHaveCount(4);
-  await expect(page.locator('[data-lups-value="restore"]')).toBeFocused();
-  await expect(page.locator('.lups-menu-overflow-cue')).toBeHidden();
-  await expect(page.locator('.lups-menu-overflow-cue')).toHaveAttribute('aria-hidden', 'true');
-  const menuRows = await page.locator('.lups-menu-group-items').evaluateAll((groups) => groups.map((group) => ({
-    columns: getComputedStyle(group).gridTemplateColumns.split(' ').length,
-    children: group.children.length
-  })));
-  expect(menuRows).toEqual([
-    { columns: 1, children: 1 },
-    { columns: 1, children: 1 },
-    { columns: 1, children: 3 },
-    { columns: 1, children: 1 }
-  ]);
-  await page.setViewportSize({ width: 390, height: 420 });
-  await expect(page.locator('.lups-menu-overflow-cue')).toBeVisible();
-  await page.keyboard.press('End');
-  await expect(page.locator('[data-lups-value="total-asc"]')).toBeFocused();
-  await expect(page.locator('.lups-menu-overflow-cue')).toBeHidden();
-  await page.keyboard.press('Home');
-  await expect(page.locator('[data-lups-value="restore"]')).toBeFocused();
-  await expect(page.locator('.lups-menu-overflow-cue')).toBeVisible();
-  await page.setViewportSize({ width: 390, height: 844 });
   await page.keyboard.press('ArrowDown');
   await expect(page.locator('[data-lups-value="auto-asc"]')).toBeFocused();
-  await expect(page.locator('[data-lups-value="auto-asc"]')).toHaveAttribute('tabindex', '0');
   await page.keyboard.press('Enter');
-  await expect(page.locator('#lups-menu-button')).toBeFocused();
+  await expect(trigger).toBeFocused();
   await expect(page.locator('#lups-mode')).toHaveValue('auto-asc');
-  const triggerRow = await page.locator('.lups-trigger-row').boundingBox();
-  expect(triggerRow.x).toBeGreaterThanOrEqual(0);
-  expect(triggerRow.x + triggerRow.width).toBeLessThanOrEqual(390);
+  await expect(trigger).toHaveAccessibleName('Unit price Auto · $/kg · Low → high');
   expect((await page.locator('#lups-flip-direction').boundingBox()).height).toBeGreaterThanOrEqual(44);
-  expect((await page.locator('#lups-restore').boundingBox()).height).toBeGreaterThanOrEqual(44);
-  for (const selector of ['#lups-menu-button', '#lups-flip-direction', '#lups-restore']) {
-    const action = await page.locator(selector).boundingBox();
-    expect(action.width).toBeGreaterThanOrEqual(44);
-    expect(action.height).toBeGreaterThanOrEqual(44);
-  }
-  await page.locator('#lups-menu-button').click();
-  for (const item of await page.locator('#lups-menu [role="menuitemradio"]').all()) {
+  await trigger.click();
+  await expect(page.locator('#lups-menu')).toHaveAttribute('role', 'menu');
+  await expect(page.locator('#lups-menu [role="menuitemradio"]')).toHaveCount(6);
+  await expect(page.locator('#lups-default')).toBeVisible();
+  expect(await page.locator('#lups-default').evaluate((item) => item.closest('[role="menu"]')?.id)).toBe('lups-menu');
+  for (const item of await page.locator('#lups-menu [role="menuitemradio"],#lups-default').all()) {
     const target = await item.boundingBox();
     expect(target.width).toBeGreaterThanOrEqual(44);
     expect(target.height).toBeGreaterThanOrEqual(44);
+    expect(target.x).toBeGreaterThanOrEqual(0);
+    expect(target.x + target.width).toBeLessThanOrEqual(390);
   }
-  await page.keyboard.press('Space');
-  await expect(page.locator('#lups-menu-button')).toBeFocused();
-  await page.locator('#lups-menu-button').click();
-  await page.keyboard.press('Tab');
-  const guideSummary = page.locator('.lups-guide summary');
-  await expect(guideSummary).toBeFocused();
-  await expect(page.locator('#lups-menu-host')).toBeVisible();
-  expect((await guideSummary.boundingBox()).height).toBeGreaterThanOrEqual(44);
+  await page.keyboard.press('End');
+  await expect(page.locator('#lups-default')).toBeFocused();
   await page.keyboard.press('Enter');
-  await expect(page.locator('.lups-guide')).toHaveAttribute('open', '');
-  await expect(guideSummary).toHaveAttribute('aria-expanded', 'true');
-  await expect(page.locator('.lups-guide p')).toContainText('We never compare $/kg, $/L, and $/each');
-  await expect(page.locator('.lups-guide p')).toContainText('Use the arrow beside the selector to reverse');
-  await page.keyboard.press('Shift+Tab');
-  await expect(page.locator('[data-lups-value="auto-asc"]')).toBeFocused();
-  await page.keyboard.press('Tab');
-  await expect(guideSummary).toBeFocused();
-  await page.keyboard.press('Tab');
-  await expect(page.locator('#lups-menu-host')).toBeHidden();
-  await expect(page.locator('#lups-restore')).toBeFocused();
-  await page.keyboard.press('Enter');
-  await expect(page.locator('#lups-menu-button')).toBeFocused();
-  await expect(page.locator('#lups-mode')).toHaveValue('restore');
-  await page.locator('#lups-menu-button').click();
+  await expect(page.locator('#lups-default')).toContainText('Default saved');
+  await expect.poll(() => page.evaluate(() => localStorage.getItem(
+    '__gppu_userscript_storage__:sync:defaultSortMode'
+  ))).toBe('"auto-asc"');
   await page.keyboard.press('Escape');
-  await expect(page.locator('#lups-menu-button')).toBeFocused();
+  await expect(trigger).toBeFocused();
+  await choose(page, 'restore');
+  await expect(page.locator('#lups-mode')).toHaveValue('restore');
+  await expect(page.locator('#lups-restore')).toHaveCount(0);
   const box = await page.locator('#lups-control').boundingBox();
   expect(box.x).toBeGreaterThanOrEqual(0);
   expect(box.x + box.width).toBeLessThanOrEqual(390);
@@ -488,7 +433,7 @@ test('lifts above broad bottom obstructions without interacting with them', asyn
     await page.setViewportSize(viewport);
     await openFixture(page);
     await install(page);
-    await page.locator('#lups-auto-sort').focus();
+    await page.locator('#lups-menu-button').focus();
     await page.evaluate((height) => {
       const obstruction = document.createElement('div');
       obstruction.id = 'lups-test-obstruction';
@@ -501,7 +446,7 @@ test('lifts above broad bottom obstructions without interacting with them', asyn
     }, viewport.obstructionHeight);
 
     await expect(page.locator('#lups-control')).toHaveAttribute('data-lups-obstructed', 'true');
-    await expect(page.locator('#lups-auto-sort')).toBeFocused();
+    await expect(page.locator('#lups-menu-button')).toBeFocused();
     await expect.poll(async () => {
       const controlBox = await page.locator('#lups-control').boundingBox();
       const obstructionBox = await page.locator('#lups-test-obstruction').boundingBox();
@@ -513,8 +458,7 @@ test('lifts above broad bottom obstructions without interacting with them', asyn
     expect(control.y).toBeGreaterThanOrEqual(12);
     await page.screenshot({ path: path.join(outputDirectory, `${viewport.name}-restored-lifted.png`), fullPage: false });
 
-    await page.locator('#lups-auto-sort').click();
-    await expect(page.locator('#lups-auto-sort')).toBeHidden();
+    await choose(page, 'auto-asc');
     await expect(page.locator('#lups-menu-button')).toBeFocused();
     await expect(page.locator('#lups-control')).toHaveAttribute('data-lups-obstructed', 'true');
     await expect.poll(async () => {
@@ -546,8 +490,7 @@ test('lifts above broad bottom obstructions without interacting with them', asyn
       return controlBox.y + controlBox.height <= obstructionBox.y - 11;
     }).toBe(true);
 
-    await page.locator('#lups-restore').click();
-    await expect(page.locator('#lups-auto-sort')).toBeVisible();
+    await choose(page, 'restore');
     await expect(page.locator('#lups-control')).toHaveAttribute('data-lups-obstructed', 'true');
     await expect.poll(async () => {
       const controlBox = await page.locator('#lups-control').boundingBox();
@@ -851,7 +794,7 @@ test('Loblaw bounds bridge arrays before reads and preserves the newer reentrant
   await install(page, INITIAL_TILES, 'milk');
   const annotation = page.locator('[data-fixture-id="volume-explicit"] [data-lups-annotation]');
   await expect(annotation).toHaveText('$1.60/L · Retailer');
-  await page.locator('#lups-auto-sort').click();
+  await choose(page, 'auto-asc');
 
   const oversizedReads = await page.evaluate(() => {
     let reads = 0;
@@ -1025,8 +968,8 @@ test('keeps the control styled when a retailer CSP rejects inline styles', async
   // Safari reports a CSP violation for the fallback <style>, but the CSSOM
   // stylesheet must still keep the userscript usable and visually isolated.
   await expect(page.locator('#lups-control')).toHaveCSS('position', 'fixed');
-  await expect(page.locator('#lups-menu-button')).toHaveCSS('display', 'flex');
-  await expect(page.locator('#lups-menu-button')).toHaveCSS('border-radius', '12px');
+  await expect(page.locator('#lups-menu-button')).toHaveCSS('display', 'grid');
+  await expect(page.locator('#lups-menu-button')).toHaveCSS('border-radius', '999px');
   await expect(page.locator('[data-lups-annotation]').first()).toHaveCSS('border-radius', '999px');
 
   // A retailer SPA may rebuild <head> and replace the document stylesheet list.
@@ -1038,7 +981,7 @@ test('keeps the control styled when a retailer CSP rejects inline styles', async
     document.querySelector('main').append(document.createElement('i'));
   });
   await expect(page.locator('#lups-control')).toHaveCSS('position', 'fixed');
-  await expect(page.locator('#lups-menu-button')).toHaveCSS('border-radius', '12px');
+  await expect(page.locator('#lups-menu-button')).toHaveCSS('border-radius', '999px');
   await expect(page.locator('#lups-control')).toHaveCount(1);
 });
 
@@ -1046,7 +989,7 @@ test('disables panel animation when reduced motion is requested', async ({ page 
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await openFixture(page);
   await install(page);
-  for (const selector of ['#lups-control', '#lups-menu-button', '#lups-auto-sort', '#lups-flip-direction', '.lups-menu-chevron']) {
-    await expect(page.locator(selector)).toHaveCSS('transition-duration', '0s');
+  for (const selector of ['#lups-control', '#lups-menu-button', '#lups-flip-direction', '.lups-option-icon']) {
+    await expect(page.locator(selector).first()).toHaveCSS('transition-duration', '0s');
   }
 });

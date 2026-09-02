@@ -53,6 +53,10 @@ const visualFixtureWithData = visualFixture.replace(
   '</body>',
   `<script id="__NEXT_DATA__" type="application/json">${nextData}</script></body>`
 );
+const choose = async (page, value) => {
+  await page.locator('#lups-menu-button').click();
+  await page.locator(`[data-lups-value="${value}"]`).click();
+};
 
 test('single page-world userscript captures and sorts without GM privileges', async ({ page }) => {
   const pageErrors = [];
@@ -68,44 +72,44 @@ test('single page-world userscript captures and sorts without GM privileges', as
   await expect(page.locator('[data-fixture-id="volume-explicit"]')).toHaveAttribute('data-lups-data-source', 'api');
   await expect(page.locator('[data-fixture-id="volume-explicit"] [data-lups-annotation]')).toHaveText('$1.60/L · Retailer');
 
-  await expect(page.locator('#lups-auto-sort')).toHaveAttribute('aria-label', 'Sort automatically, low to high');
-  await page.locator('#lups-auto-sort').click();
-  await expect(page.locator('#lups-auto-sort')).toBeHidden();
+  await choose(page, 'auto-asc');
   await expect(page.locator('#lups-status')).toContainText('3 comparable');
   await expect(page.locator('#lups-status')).not.toContainText('Automatic chose');
   await expect(page.locator('#lups-live-status')).toContainText('Automatic chose $/kg · Low → high · 3 comparable');
   await expect(page.locator('#lups-status')).toContainText('2 unavailable');
-  await expect(page.locator('#lups-status')).toBeVisible();
-  await expect(page.locator('#lups-restore')).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Restore website order' })).toBeVisible();
+  await expect(page.locator('#lups-restore')).toHaveCount(0);
   await expect(page.locator('#lups-menu-button-text')).toHaveText('Auto · $/kg · Low → high');
-  await expect.poll(() => page.evaluate(() => localStorage.getItem(
+  expect(await page.evaluate(() => localStorage.getItem(
     '__gppu_userscript_storage__:sync:defaultSortMode'
-  ))).toBe('"auto-asc"');
+  ))).toBeNull();
   await page.locator('#lups-flip-direction').click();
   await expect(page.locator('#lups-mode')).toHaveValue('auto-desc');
   await expect(page.locator('#lups-menu-button')).toBeFocused();
   await expect(page.locator('#lups-menu-button')).toHaveAccessibleName('Unit price Auto · $/kg · High → low');
-  await expect.poll(() => page.evaluate(() => localStorage.getItem(
+  expect(await page.evaluate(() => localStorage.getItem(
     '__gppu_userscript_storage__:sync:defaultSortMode'
-  ))).toBe('"auto-desc"');
-  await expect(page.locator('.lups-menu-group')).toHaveCount(4);
+  ))).toBeNull();
   await page.keyboard.press('Enter');
   await expect(page.locator('#lups-menu-button')).toHaveAttribute('aria-expanded', 'true');
   await expect(page.getByRole('menuitemradio', { name: 'Automatic, Predominant comparable unit' })).toBeFocused();
   await expect(page.getByRole('menuitemradio', { name: 'Automatic, Predominant comparable unit' })).toHaveAttribute('aria-checked', 'true');
   await expect(page.locator('#lups-mode')).toHaveValue('auto-desc');
   await expect(page.locator('[role="menuitemradio"][aria-checked="true"]')).toHaveCount(1);
-  await page.keyboard.press('Escape');
-  await expect(page.locator('#lups-menu-button')).toHaveAttribute('aria-expanded', 'false');
-  await page.locator('#lups-restore').click();
-  await expect(page.locator('#lups-live-status')).toContainText('Website order · 8 loaded products');
-  await expect(page.locator('#lups-status-row')).toBeHidden();
-  await expect(page.locator('#lups-restore')).toBeHidden();
-  await expect(page.locator('#lups-auto-sort')).toBeVisible();
+  await page.locator('#lups-default').click();
+  await expect(page.locator('#lups-default')).toContainText('Default saved');
   await expect.poll(() => page.evaluate(() => localStorage.getItem(
     '__gppu_userscript_storage__:sync:defaultSortMode'
-  ))).toBe('"restore"');
+  ))).toBe('"auto-desc"');
+  await page.keyboard.press('Escape');
+  await expect(page.locator('#lups-menu-button')).toHaveAttribute('aria-expanded', 'false');
+  await choose(page, 'restore');
+  await expect(page.locator('#lups-live-status')).toContainText('Website order · 8 loaded products');
+  await page.locator('#lups-menu-button').hover();
+  await expect(page.locator('#lups-status-row')).toBeVisible();
+  await expect(page.locator('#lups-restore')).toHaveCount(0);
+  await expect.poll(() => page.evaluate(() => localStorage.getItem(
+    '__gppu_userscript_storage__:sync:defaultSortMode'
+  ))).toBe('"auto-desc"');
   await page.locator('#lups-menu-button').focus();
   await page.keyboard.press('Space');
   await expect(page.locator('#lups-menu-button')).toHaveAttribute('aria-expanded', 'true');
@@ -258,8 +262,8 @@ test('built No Frills userscript hides and safely restores only an exact sponsor
   await expect(page.locator('[data-fixture-id="userscript-link-text-sponsored"]')).toBeVisible();
   await expect(page.locator('[data-fixture-id="userscript-exact-title-sponsored"]')).toBeVisible();
   await expect(page.locator('#lups-status')).toContainText('1 sponsored/ad tile hidden');
-  await page.locator('#lups-auto-sort').click();
-  await page.locator('#lups-restore').click();
+  await choose(page, 'auto-asc');
+  await choose(page, 'restore');
   await expect(sponsored).toHaveCSS('display', 'none');
   await expect(sponsored.locator('button')).toHaveCount(1);
   expect(await sponsored.locator('button').evaluate((button) => !button.disabled)).toBe(true);
@@ -319,6 +323,8 @@ test('userscript keeps the newer in-memory preference after a partial storage fa
 
   await page.locator('#lups-menu-button').click();
   await page.locator('[data-lups-value="mass-asc"]').click();
+  await page.locator('#lups-menu-button').click();
+  await page.locator('#lups-default').click();
   await expect.poll(() => page.evaluate(async () => {
     const capability = globalThis[Symbol.for('grocery-price-per-unit.storage.v1')];
     return (await capability.storage.sync.get({ defaultSortMode: 'restore' })).defaultSortMode;
@@ -545,7 +551,7 @@ test('Walmart clears and rebuilds state when a recycled card loses its product i
   await page.goto('https://www.walmart.ca/recycled-identity-fixture?q=rice');
   const recycled = page.locator('[data-name="recycled"] .card');
   await expect(recycled.locator('.price-per-unit-info')).toHaveText('$6.00/kg · Calculated');
-  await page.locator('#lups-auto-sort').click();
+  await choose(page, 'auto-asc');
   await expect.poll(() => page.locator('#grid > .wrapper').evaluateAll((wrappers) => wrappers
     .map((wrapper) => ({ name: wrapper.dataset.name, order: Number(wrapper.style.order) }))
     .sort((left, right) => left.order - right.order).map((item) => item.name)))
@@ -631,7 +637,7 @@ test('Walmart reads message schema once and commits batch updates transactionall
   await page.waitForTimeout(0);
   await expect(page.locator('[data-item-id="a"] .price-per-unit-info')).toHaveText('$2.00/kg · Calculated');
   await expect(page.locator('[data-item-id="b"] .price-per-unit-info')).toHaveText('$3.00/kg · Calculated');
-  await page.locator('#lups-auto-sort').click();
+  await choose(page, 'auto-asc');
 
   await page.evaluate((context) => {
     let reads = 0;
@@ -730,7 +736,7 @@ test('generated userscript claims one engine and preserves chosen order after re
     ]
   }, location.origin), context);
   await expect(page.locator('.price-per-unit-info')).toHaveCount(3);
-  await page.locator('#lups-auto-sort').click();
+  await choose(page, 'auto-asc');
   const visualOrder = () => page.locator('#grid > .wrapper').evaluateAll((wrappers) => wrappers
     .map((wrapper) => ({ name: wrapper.dataset.name, order: Number(wrapper.style.order) }))
     .sort((left, right) => left.order - right.order).map((item) => item.name));
@@ -869,7 +875,7 @@ test('Walmart userscript avoids redundant scans after one API update', async ({ 
   await page.waitForTimeout(350);
   expect(await page.evaluate(() => window.__gppuMeasurements)).toEqual({ updates: 1, cardQueries: 2 });
 
-  await page.locator('#lups-auto-sort').click();
+  await choose(page, 'auto-asc');
   await expect.poll(async () => page.locator('#grid > .wrapper').evaluateAll((wrappers) => wrappers
     .map((wrapper) => ({ id: wrapper.querySelector('[data-item-id]')?.dataset.itemId, order: Number(wrapper.style.order) }))
     .sort((left, right) => left.order - right.order)
@@ -1070,7 +1076,7 @@ test('Walmart clears same-query prices when the page/store context changes', asy
   const annotation = page.locator('[data-item-id="scoped-milk"] .price-per-unit-info');
   await page.evaluate(() => fetch('/orchestra/snb/graphql/search?variables=' + encodeURIComponent(JSON.stringify({ query: 'milk', page: 1, store: 'alpha' }))));
   await expect(annotation).toHaveText('$4.00/L · Calculated');
-  await page.locator('#lups-auto-sort').click();
+  await choose(page, 'auto-asc');
   await expect(page.locator('#lups-control')).toHaveAttribute('data-lups-data-state', 'ready');
 
   await page.evaluate(() => {
@@ -1314,7 +1320,7 @@ test('Save-On rejects a throwing snapshot transaction without losing accepted pr
   const low = page.locator('[data-name="milk-low"] [data-lups-annotation]');
   await expect(high).toHaveText('$4.00/L · Retailer');
   await expect(low).toHaveText('$1.50/L · Retailer');
-  await page.locator('#lups-auto-sort').click();
+  await choose(page, 'auto-asc');
   const initialOrder = await page.locator('#grid > .wrapper').evaluateAll((wrappers) => wrappers
     .map((wrapper) => ({ name: wrapper.dataset.name, order: Number(wrapper.style.order) }))
     .sort((left, right) => left.order - right.order).map((item) => item.name));

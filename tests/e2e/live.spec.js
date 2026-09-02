@@ -53,20 +53,15 @@ test.describe('low-frequency live storefront checks', () => {
     expect(relevantPageErrors(pageErrors.slice(baselineErrorCount))).toEqual([]);
     // The site's first-visit privacy layer intentionally intercepts all page clicks.
     // Dispatch directly so the test does not make a consent choice for the user.
-    await page.locator('#lups-restore').evaluate((button) => button.click());
+    await page.locator('#lups-menu-button').evaluate((button) => button.click());
+    await page.locator('[data-lups-value="restore"]').evaluate((button) => button.click());
     await expect(page.locator('#lups-status')).toContainText('Website order');
     await page.screenshot({ path: `artifacts/screenshots/live-${entry.banner}-${entry.query}.png`, fullPage: false });
     if (entry.guide) {
       await page.locator('#lups-menu-button').evaluate((button) => button.click());
-      await page.locator('.lups-guide summary').evaluate((summary) => summary.click());
-      await expect(page.locator('.lups-guide')).toHaveAttribute('open', '');
-      await expect(page.locator('.lups-guide p')).toContainText('We never compare $/kg, $/L, and $/each');
-      await expect.poll(async () => {
-        const menu = await page.locator('#lups-menu-host').boundingBox();
-        const guide = await page.locator('.lups-guide').boundingBox();
-        return guide.y >= menu.y && guide.y + guide.height <= menu.y + menu.height + 1;
-      }).toBe(true);
-      await page.screenshot({ path: `artifacts/screenshots/live-${entry.banner}-${entry.query}-guide.png`, fullPage: false });
+      await expect(page.locator('#lups-menu [role="menuitemradio"]')).toHaveCount(6);
+      await expect(page.locator('#lups-default')).toBeVisible();
+      await page.screenshot({ path: `artifacts/screenshots/live-${entry.banner}-${entry.query}-menu.png`, fullPage: false });
     }
   });
 

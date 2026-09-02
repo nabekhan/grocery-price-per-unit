@@ -214,10 +214,10 @@ ${storageShim}
   const hostname = window.location.hostname;
   ${branches.join(' else ')}
 
-  /* Persist only validated in-page mode changes. A descending mode remains a
-   * valid stored preference even though direction is changed through the
-   * dedicated arrow rather than duplicated menu entries. */
-  document.addEventListener('gppu:mode-change', (event) => {
+  /* The selected mode affects only the current page until the shopper explicitly
+   * chooses “Use as default”. The namespaced local preference is deliberately
+   * scoped to each retailer origin; unrelated sites cannot read it. */
+  document.addEventListener('gppu:default-change', (event) => {
     const value = event.detail?.value;
     if (!/^(restore|(auto|mass|volume|count|total)-(asc|desc))$/.test(value || '')) return;
     write('sync', 'defaultSortMode', value);

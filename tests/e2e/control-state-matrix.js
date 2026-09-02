@@ -31,6 +31,8 @@ export async function captureControlStateMatrix(page, {
       const rect = (selector = null) => {
         const element = selector ? control.querySelector(selector) : control;
         if (!element || element.hidden) return null;
+        const computed = getComputedStyle(element);
+        if (computed.display === 'none' || computed.visibility === 'hidden' || Number(computed.opacity) === 0) return null;
         const box = element.getBoundingClientRect();
         return { x: box.x, y: box.y, width: box.width, height: box.height };
       };
@@ -45,7 +47,7 @@ export async function captureControlStateMatrix(page, {
       };
       const annotations = [...document.querySelectorAll('[data-lups-annotation]')];
       const menuVisible = !control.querySelector('#lups-menu-host')?.hidden;
-      const menuItems = [...control.querySelectorAll('[data-lups-value]')];
+      const menuItems = [...control.querySelectorAll('[role="menuitemradio"],[role="menuitem"]')];
       const menuItemBoxes = menuVisible ? menuItems.map((item) => item.getBoundingClientRect()) : [];
       const optionText = menuVisible
         ? [...control.querySelectorAll('.lups-option-title,.lups-option-detail')]
@@ -69,8 +71,6 @@ export async function captureControlStateMatrix(page, {
         buttonText: control.querySelector('#lups-menu-button-text')?.textContent,
         statusText: control.querySelector('#lups-status')?.textContent,
         announcementText: control.querySelector('#lups-live-status')?.textContent,
-        guideOpen: control.querySelector('.lups-guide')?.open,
-        guideText: control.querySelector('.lups-guide p')?.textContent,
         optionValues: [...control.querySelectorAll('[data-lups-value]')].map((item) => item.dataset.lupsValue),
         statusRoleCount: control.querySelectorAll('[role="status"], [aria-live]').length,
         annotationCount: annotations.length,
@@ -93,10 +93,8 @@ export async function captureControlStateMatrix(page, {
           trigger: rect('.lups-trigger-row'),
           menu: rect('#lups-menu-host'),
           status: rect('#lups-status-row'),
-          auto: rect('#lups-auto-sort'),
           reverse: rect('#lups-flip-direction'),
-          restore: rect('#lups-restore'),
-          guide: rect('.lups-guide')
+          defaultAction: rect('#lups-default')
         },
         computedStyles: {
           trigger: styles('#lups-menu-button'),
@@ -125,23 +123,22 @@ export async function captureControlStateMatrix(page, {
     await expect(page.locator('#lups-control')).toHaveCount(1);
     await expect.poll(() => page.locator('[data-lups-annotation]').count()).toBeGreaterThan(0);
     await capture(viewport, 'restored-closed');
+    await page.locator('#lups-menu-button').hover();
+    await capture(viewport, 'restored-tooltip');
     if (enterFilteredRestore && exitFilteredRestore) {
       await enterFilteredRestore(viewport);
-      await expect(page.locator('#lups-status')).toHaveText('Website order · 1 sponsored/ad tile hidden');
+      await expect(page.locator('#lups-status')).toHaveText('Website order · 8 loaded products · 1 sponsored/ad tile hidden');
+      await page.locator('#lups-menu-button').hover();
       await expect(page.locator('#lups-status-row')).toBeVisible();
-      await expect(page.locator('#lups-restore')).toBeHidden();
       await capture(viewport, 'restored-filtered');
       await exitFilteredRestore(viewport);
+      await page.locator('h1').click();
       await expect(page.locator('#lups-status-row')).toBeHidden();
     }
     await page.locator('#lups-menu-button').click();
     await capture(viewport, 'restored-menu-open');
-    await page.locator('.lups-guide summary').click();
-    await expect(page.locator('.lups-guide')).toHaveAttribute('open', '');
-    await expect(page.locator('.lups-guide summary')).toHaveAttribute('aria-expanded', 'true');
-    await capture(viewport, 'restored-guide-open');
-    await page.keyboard.press('Escape');
-    await page.locator('#lups-auto-sort').click();
+    await page.locator('[data-lups-value="auto-asc"]').click();
+    await page.locator('#lups-menu-button').hover();
     await capture(viewport, 'automatic-ascending');
     if (enterPending && exitPending) {
       await enterPending(viewport);
@@ -165,8 +162,7 @@ export async function captureControlStateMatrix(page, {
     await capture(viewport, 'automatic-descending');
     await page.locator('#lups-menu-button').click();
     await capture(viewport, 'automatic-descending-menu-open');
-    await page.keyboard.press('Escape');
-    await page.locator('#lups-restore').click();
+    await page.locator('[data-lups-value="restore"]').click();
   }
 
   await fs.writeFile(
@@ -183,7 +179,8 @@ export async function captureForcedColorsControl(page, { outputDirectory, setup 
   await setup({ name: 'forced-colors-390', width: 390, height: 844 });
   await expect(page.locator('#lups-control')).toHaveCount(1);
   await expect.poll(() => page.locator('[data-lups-annotation]').count()).toBeGreaterThan(0);
-  await page.locator('#lups-auto-sort').click();
+  await page.locator('#lups-menu-button').click();
+  await page.locator('[data-lups-value="auto-asc"]').click();
   await page.locator('#lups-menu-button').focus();
   await page.keyboard.press('Enter');
   const selected = page.locator('[data-lups-value="auto-asc"]');
@@ -195,7 +192,8 @@ export async function captureForcedColorsControl(page, { outputDirectory, setup 
   const evidence = await page.locator('#lups-control').evaluate((control) => {
     const menuItems = [...control.querySelectorAll('[data-lups-value]')];
     const selectedItem = control.querySelector('[data-lups-value="auto-asc"]');
-    const selectedStyle = getComputedStyle(selectedItem);
+    const selectedStyle = getComputedStyle(selectedItem.querySelector('.lups-option-icon'));
+    const selectedFocusStyle = getComputedStyle(selectedItem);
     const selectedBox = selectedItem.getBoundingClientRect();
     const menuBox = control.querySelector('#lups-menu-host').getBoundingClientRect();
     const optionText = [...control.querySelectorAll('.lups-option-title,.lups-option-detail')];
@@ -216,8 +214,8 @@ export async function captureForcedColorsControl(page, { outputDirectory, setup 
       selected: selectedItem?.dataset.lupsValue,
       selectedBorderStyle: selectedStyle.borderStyle,
       selectedBorderWidth: selectedStyle.borderWidth,
-      focusOutlineStyle: selectedStyle.outlineStyle,
-      focusOutlineWidth: selectedStyle.outlineWidth,
+      focusOutlineStyle: selectedFocusStyle.outlineStyle,
+      focusOutlineWidth: selectedFocusStyle.outlineWidth,
       tickVisible: !selectedItem?.querySelector('[data-lups-tick]')?.hidden,
       minimumTarget: {
         width: Math.min(...menuItems.map((item) => item.getBoundingClientRect().width)),
@@ -277,45 +275,40 @@ export function expectControlStateMatrix(evidence) {
       && new Set(Object.values(annotations).map((style) => style.color)).size === 3;
   })).toBe(true);
 
-  const restoredStates = evidence.filter((item) => item.state.startsWith('restored-')
-    && item.state !== 'restored-filtered');
-  expect(restoredStates.every((item) => item.restored === 'true'
+  const restoredClosedStates = evidence.filter((item) => item.state === 'restored-closed');
+  expect(restoredClosedStates.every((item) => item.restored === 'true'
     && item.geometry.status === null && item.geometry.reverse === null
-    && item.geometry.auto?.height >= 44)).toBe(true);
+    && item.geometry.trigger?.height >= 48)).toBe(true);
+  const tooltipStates = evidence.filter((item) => item.state === 'restored-tooltip');
+  expect(tooltipStates.every((item) => item.restored === 'true'
+    && item.geometry.status !== null && item.geometry.reverse === null
+    && item.geometry.status.x >= 0
+    && item.geometry.status.x + item.geometry.status.width <= item.viewport.width + 1)).toBe(true);
   const filteredRestoreStates = evidence.filter((item) => item.state === 'restored-filtered');
   expect(filteredRestoreStates).toHaveLength(CONTROL_VIEWPORTS.length);
   expect(filteredRestoreStates.every((item) => item.restored === 'true'
     && item.dataState === 'ready'
-    && item.statusText === 'Website order · 1 sponsored/ad tile hidden'
+    && item.statusText === 'Website order · 8 loaded products · 1 sponsored/ad tile hidden'
     && item.announcementText === 'Website order · 8 loaded products · 1 sponsored/ad tile hidden'
-    && item.geometry.status !== null && item.geometry.restore === null
-    && item.geometry.reverse === null && item.geometry.auto?.height >= 44
+    && item.geometry.status !== null
+    && item.geometry.reverse === null
     && item.geometry.status.x >= 0
     && item.geometry.status.x + item.geometry.status.width <= item.viewport.width + 1)).toBe(true);
 
   const openStates = evidence.filter((item) => item.state.endsWith('menu-open'));
-  const guideStates = evidence.filter((item) => item.state.endsWith('guide-open'));
-  const panelStates = [...openStates, ...guideStates];
-  expect(panelStates.every((item) => item.geometry.menu.x >= 0
+  expect(openStates.every((item) => item.geometry.menu.x >= 0
     && item.geometry.menu.x + item.geometry.menu.width <= item.viewport.width + 1
     && item.geometry.menu.y >= 0
     && item.geometry.trigger.y - (item.geometry.menu.y + item.geometry.menu.height) >= 7
     && item.geometry.trigger.y - (item.geometry.menu.y + item.geometry.menu.height) <= 13
     && item.menuItemMinimumSize?.width >= 44
     && item.menuItemMinimumSize?.height >= 44
-    && item.clippedOptionTextCount === 0)).toBe(true);
-  expect(guideStates.every((item) => item.guideOpen
-    && item.guideText.includes('most common comparable unit among loaded products')
-    && item.guideText.includes('Use the arrow beside the selector to reverse')
-    && item.guideText.includes('We never compare $/kg, $/L, and $/each')
-    && item.geometry.guide?.height >= 44
-    && item.geometry.guide.y >= item.geometry.menu.y
-    && item.geometry.guide.y + item.geometry.guide.height <= item.geometry.menu.y + item.geometry.menu.height + 1
-    && !item.overflowCueVisible)).toBe(true);
+    && item.geometry.defaultAction?.height >= 44
+    && item.clippedOptionTextCount === 0
+    && item.geometry.status === null)).toBe(true);
 
   const activeStates = evidence.filter((item) => item.state.startsWith('automatic-'));
   expect(activeStates.every((item) => item.restored === 'false'
-    && item.geometry.auto === null
     && item.statusText.includes('Loaded range')
     && !item.statusText.includes('Automatic chose')
     && item.announcementText.includes('Automatic chose'))).toBe(true);
@@ -324,14 +317,16 @@ export function expectControlStateMatrix(evidence) {
   expect(activeStates.filter((item) => item.state.includes('descending'))
     .every((item) => item.mode === 'auto-desc' && item.buttonText.includes('High → low'))).toBe(true);
 
+  expect(activeStates.filter((item) => item.state === 'automatic-ascending')
+    .every((item) => item.geometry.status !== null)).toBe(true);
   const phoneActiveStates = activeStates.filter((item) => item.viewport.width <= 390
-    && !item.state.endsWith('menu-open'));
+    && item.geometry.status !== null);
   expect(phoneActiveStates.every((item) => item.geometry.status.height <= (item.viewport.width === 320 ? 79 : 63)
     && item.geometry.status.x >= 0
     && item.geometry.status.x + item.geometry.status.width <= item.viewport.width + 1
     && item.geometry.status.y >= 0
     && item.geometry.status.y + item.geometry.status.height <= item.viewport.height + 1
-    && item.geometry.reverse.height >= 44 && item.geometry.restore.height >= 44)).toBe(true);
+    && item.geometry.reverse.height >= 44)).toBe(true);
   expect(openStates.filter((item) => item.viewport.width <= 390)
     .every((item) => !item.overflowCueVisible)).toBe(true);
 
@@ -343,8 +338,9 @@ export function expectControlStateMatrix(evidence) {
     && item.statusText === 'Waiting for current-page product data · Website order preserved · 8 loaded products · 1 sponsored/ad tile hidden'
     && item.announcementText === item.statusText
     && item.annotationCount === 0 && item.inlineOrderCount === 0
-    && item.geometry.auto === null && item.geometry.reverse?.height >= 44
-    && item.geometry.restore?.height >= 44 && item.geometry.status !== null)).toBe(true);
+    && item.geometry.reverse?.height >= 44 && item.geometry.status !== null
+    && item.geometry.status.x >= 0
+    && item.geometry.status.x + item.geometry.status.width <= item.viewport.width + 1)).toBe(true);
   expect(pendingStates.filter((item) => item.viewport.width <= 390)
     .every((item) => item.geometry.status.height <= 110)).toBe(true);
 
@@ -356,11 +352,9 @@ export function expectControlStateMatrix(evidence) {
     && item.statusText === 'No matching product data in these loaded results · Website order preserved · 8 loaded products · 1 sponsored/ad tile hidden'
     && item.announcementText === item.statusText
     && item.annotationCount === 0 && item.inlineOrderCount === 0
-    && item.geometry.auto === null && item.geometry.reverse?.height >= 44
-    && item.geometry.restore?.height >= 44 && item.geometry.status !== null
+    && item.geometry.reverse?.height >= 44 && item.geometry.status !== null
     && item.geometry.status.x >= 0
     && item.geometry.status.x + item.geometry.status.width <= item.viewport.width + 1
-    && item.geometry.status.y >= item.geometry.trigger.y + item.geometry.trigger.height + 7
     && item.geometry.status.y + item.geometry.status.height <= item.viewport.height + 1)).toBe(true);
   expect(noMatchStates.filter((item) => item.viewport.width === 320)
     .every((item) => item.geometry.status.height <= 126)).toBe(true);
