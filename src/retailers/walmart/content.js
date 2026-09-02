@@ -2,6 +2,7 @@ import { formatUnitPrice, speakUnitPrice } from '../../ui/format.js';
 import { MAX_RENDERED_CARDS, publishApiScanState } from './scan-state.js';
 import { claimRuntimeInstall } from '../../runtime/install.js';
 import { areOnlyOwnedMutations } from '../../runtime/mutations.js';
+import { createScanScheduler } from '../../runtime/retailer-lifecycle.js';
 
 /*!
  * Walmart card annotator. Scope-checked API/cache records join rendered cards
@@ -84,7 +85,6 @@ const bulkUnitRegexString = (() => {
 })();
 
 const processedSignatures = new WeakMap();
-const installClaimed = claimRuntimeInstall('walmart-content');
 const processedStates = new WeakMap();
 const managedProductContainers = new Set();
 const apiProductsById = new NativeMap();
@@ -97,6 +97,7 @@ const MAX_API_REVISION_ADVANCE = 10_000;
 let apiProductRevision = 0;
 let apiProductScope = null;
 let apiMessageGeneration = 0;
+let lifecycle = null;
 
 function reportApiStatus(level, message, details) {
     try {
@@ -251,14 +252,14 @@ function scopeForApiContext(context) {
     return `page:${context.pageIdentity || ''}`;
 }
 
-function currentApiScope() {
+export function getWalmartScope() {
     const current = currentApiPageContext();
     if (current.query !== null) return `query:${current.query}|page:${current.pageIdentity || ''}`;
     return current.pageIdentity === null ? null : `page:${current.pageIdentity}`;
 }
 
 function apiProductForContainer(container) {
-    const activeScope = currentApiScope();
+    const activeScope = getWalmartScope();
     if (activeScope === null || apiProductScope !== activeScope) return null;
     const productId = container.getAttribute('data-item-id');
     return productId ? mapGet(apiProductsById, productId) || null : null;
@@ -366,12 +367,19 @@ function ingestApiProductsMessageTransaction(event) {
         cachedProducts: mapSize(apiProductsById),
         changed
     });
-    if (changed) processProducts(true, {
-            mode,
+    scheduleProductScan({
+        urgent: true,
+        force: changed,
+        apiReport: changed ? {
+        mode,
         revision,
         query: context.query,
         receivedProducts: productCount
+        } : null
     });
+    // Queue annotation first. Lifecycle subscribers (including the sorter) then
+    // join the same animation frame after the trusted card model is refreshed.
+    lifecycle?.accept(nextScope);
     return changed;
 }
 
@@ -384,16 +392,6 @@ function ingestApiProductsMessage(event) {
         });
         return false;
     }
-}
-
-if (installClaimed) {
-    window.addEventListener('message', ingestApiProductsMessage);
-    reportApiStatus('info', 'page-world bridge ready; requesting captured product snapshot');
-    window.postMessage?.({
-        source: API_BRIDGE_SOURCE,
-        version: API_BRIDGE_VERSION,
-        type: 'api-products-request'
-    }, window.location?.origin || '*');
 }
 
 function getUnit(unitText) {
@@ -1051,7 +1049,7 @@ function processProducts(isForced = false, apiReport = null) {
             }
         });
         const publication = publishApiScanState({
-            accepted: apiProductScope !== null && apiProductScope === currentApiScope(),
+            accepted: apiProductScope !== null && apiProductScope === getWalmartScope(),
             renderedCards: scan.renderedCards,
             apiCards: scan.apiCards
         }, trustedModels);
@@ -1066,23 +1064,32 @@ function processProducts(isForced = false, apiReport = null) {
         }
 }
 
-// Re-run when DOM changes
-let productScanTimer = null;
-function scheduleProductScan() {
-    if (productScanTimer !== null) return;
-    productScanTimer = setTimeout(() => {
-        productScanTimer = null;
-        processProducts();
-    }, 150);
+// Re-run when DOM changes. Accepted API snapshots promote any pending 150 ms
+// DOM scan to the next animation frame through the shared retailer scheduler.
+let productScanScheduler = null;
+let pendingForcedScan = false;
+let pendingApiReport = null;
+function runProductScan() {
+    const forced = pendingForcedScan;
+    const apiReport = pendingApiReport;
+    pendingForcedScan = false;
+    pendingApiReport = null;
+    processProducts(forced, apiReport);
+}
+function scheduleProductScan({ urgent = false, force = false, apiReport = null } = {}) {
+    pendingForcedScan ||= force;
+    if (apiReport) pendingApiReport = apiReport;
+    return productScanScheduler?.({ urgent }) || false;
 }
 let productObserver;
 let productProcessingStarted = false;
-let observedApiScope = currentApiScope();
+let observedApiScope = getWalmartScope();
 
 function detectPageScopeChange() {
-    const nextScope = currentApiScope();
+    const nextScope = getWalmartScope();
     if (nextScope === observedApiScope) return;
     observedApiScope = nextScope;
+    lifecycle?.beginWaiting(nextScope);
     scheduleProductScan();
 }
 
@@ -1113,7 +1120,18 @@ function startProductProcessing() {
     setInterval(detectPageScopeChange, 200);
 }
 
-if (installClaimed) {
+export function installWalmartAnnotator(context = {}) {
+    if (!claimRuntimeInstall('walmart-content')) return false;
+    lifecycle = context.lifecycle || null;
+    productScanScheduler = createScanScheduler(window, runProductScan, { delayMs: 150 });
+    window.addEventListener('message', ingestApiProductsMessage);
+    reportApiStatus('info', 'page-world bridge ready; requesting captured product snapshot');
+    window.postMessage?.({
+        source: API_BRIDGE_SOURCE,
+        version: API_BRIDGE_VERSION,
+        type: 'api-products-request'
+    }, window.location?.origin || '*');
     if (document.body) startProductProcessing();
     else document.addEventListener('DOMContentLoaded', startProductProcessing, { once: true });
+    return true;
 }

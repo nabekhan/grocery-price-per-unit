@@ -1329,7 +1329,7 @@ test('Save-On rejects a throwing snapshot transaction without losing accepted pr
       data: {
         source: 'saveon-price-per-unit', version: 2, type: 'api-products', mode: 'snapshot',
         revision: window.__gppuRejectedSaveOnRevision,
-        context: { query: 'milk', pagePath: '/sm/pickup/rsid/6632/results?q=milk' },
+        context: { query: 'milk', storeId: '6632', pagePath: '/sm/pickup/rsid/6632/results?q=milk' },
         products: [
           { id: 'milk-high', name: 'Partially read update', currentPrice: 5, unitPrice: '$0.50/100ml' },
           throwingProduct
@@ -1349,7 +1349,7 @@ test('Save-On rejects a throwing snapshot transaction without losing accepted pr
   await page.evaluate(() => window.postMessage({
     source: 'saveon-price-per-unit', version: 2, type: 'api-products', mode: 'snapshot',
     revision: window.__gppuRejectedSaveOnRevision,
-    context: { query: 'milk', pagePath: '/sm/pickup/rsid/6632/results?q=milk' },
+    context: { query: 'milk', storeId: '6632', pagePath: '/sm/pickup/rsid/6632/results?q=milk' },
     products: [
       { id: 'milk-high', name: 'Accepted update', currentPrice: 5, unitPrice: '$0.50/100ml' },
       { id: 'milk-low', name: 'Milk 4 L', currentPrice: 6, unitPrice: '$0.15/100ml' }
@@ -1386,6 +1386,107 @@ test('Save-On userscript hides only sponsored placeholders', async ({ page }) =>
   await marker.evaluate((node) => node.setAttribute('aria-label', 'Loading sponsored product'));
   await expect(sponsored).toHaveCSS('display', 'none');
   expect(pageErrors).toEqual([]);
+});
+
+const lateInjectionFixtures = [
+  {
+    name: 'Superstore',
+    url: 'https://www.realcanadiansuperstore.ca/late-injection-fixture?search-bar=milk&storeId=1',
+    body: fixture,
+    loaded: 8
+  },
+  {
+    name: 'No Frills',
+    url: 'https://www.nofrills.ca/late-injection-fixture?search-bar=milk&storeId=1',
+    body: fixture,
+    loaded: 8
+  },
+  {
+    name: 'Walmart',
+    url: 'https://www.walmart.ca/late-injection-fixture?q=milk&store=1',
+    body: `<!doctype html><style>#grid{display:flex}.wrapper,.card{width:140px;height:80px}</style><div id="grid">
+      <div class="wrapper"><div class="card" data-item-id="one"></div></div>
+      <div class="wrapper"><div class="card" data-item-id="two"></div></div>
+    </div>`,
+    loaded: 2
+  },
+  {
+    name: 'Save-On',
+    url: 'https://www.saveonfoods.com/sm/pickup/rsid/6632/results?q=milk',
+    body: `<!doctype html><style>#grid{display:flex}.wrapper,article{width:140px;height:80px}</style><ul id="grid">
+      <li class="wrapper"><article data-testid="ProductCardWrapper-one"></article></li>
+      <li class="wrapper"><article data-testid="ProductCardWrapper-two"></article></li>
+    </ul>`,
+    loaded: 2
+  }
+];
+
+for (const retailer of lateInjectionFixtures) {
+  test(`${retailer.name} gives a user-operated recovery path after late injection`, async ({ page }) => {
+    const pageErrors = [];
+    let navigations = 0;
+    page.on('pageerror', (error) => pageErrors.push(error.message));
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.route(new URL(retailer.url).origin + '/**', (route) => {
+      navigations += 1;
+      return route.fulfill({ body: retailer.body, contentType: 'text/html' });
+    });
+    await page.goto(retailer.url);
+    await page.evaluate(() => localStorage.setItem(
+      '__gppu_userscript_storage__:sync:defaultSortMode', '"auto-asc"'
+    ));
+    await page.addScriptTag({ content: userscript });
+
+    await expect(page.locator('#lups-control')).toHaveAttribute('data-lups-data-state', 'reload-needed', { timeout: 3_000 });
+    await expect(page.locator('#lups-status')).toContainText('Current product data was loaded before the userscript · Reload once');
+    await expect(page.locator('#lups-status')).toContainText(`${retailer.loaded} loaded products`);
+    const reload = page.getByRole('button', { name: 'Reload page to capture current product data' });
+    await expect(reload).toBeVisible();
+    const controlBox = await page.locator('#lups-control').boundingBox();
+    const reloadBox = await reload.boundingBox();
+    expect(controlBox.x).toBeGreaterThanOrEqual(0);
+    expect(controlBox.x + controlBox.width).toBeLessThanOrEqual(391);
+    expect(reloadBox.height).toBeGreaterThanOrEqual(44);
+    if (retailer.name === 'Superstore') {
+      await fs.mkdir(path.join(root, 'artifacts/screenshots/recovery'), { recursive: true });
+      await page.screenshot({
+        path: path.join(root, 'artifacts/screenshots/recovery/late-capture-phone.png'),
+        fullPage: false
+      });
+    }
+    await page.waitForTimeout(250);
+    expect(navigations).toBe(1);
+    expect(pageErrors).toEqual([]);
+  });
+}
+
+test('a user reload recovers a late Superstore install from current bootstrap data', async ({ page }) => {
+  let navigations = 0;
+  await page.route('https://www.realcanadiansuperstore.ca/reload-recovery-fixture*', (route) => {
+    navigations += 1;
+    return route.fulfill({
+      body: navigations === 1 ? fixture : fixtureWithData,
+      contentType: 'text/html'
+    });
+  });
+  await page.goto('https://www.realcanadiansuperstore.ca/reload-recovery-fixture?search-bar=milk');
+  await page.addInitScript({ content: userscript });
+  await page.evaluate(() => localStorage.setItem(
+    '__gppu_userscript_storage__:sync:defaultSortMode', '"auto-asc"'
+  ));
+  await page.addScriptTag({ content: userscript });
+
+  await expect(page.locator('#lups-control')).toHaveAttribute('data-lups-data-state', 'reload-needed', { timeout: 3_000 });
+  expect(navigations).toBe(1);
+  await Promise.all([
+    page.waitForNavigation(),
+    page.getByRole('button', { name: 'Reload page to capture current product data' }).click()
+  ]);
+
+  expect(navigations).toBe(2);
+  await expect(page.locator('#lups-control')).toHaveAttribute('data-lups-data-state', 'ready');
+  await expect(page.locator('[data-fixture-id="volume-explicit"] [data-lups-annotation]')).toHaveText('$1.60/L · Retailer');
+  await expect(page.locator('#lups-reload')).toBeHidden();
 });
 
 test('userscript metadata keeps capture and UI in the page world', async () => {

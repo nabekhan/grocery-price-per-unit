@@ -4,6 +4,7 @@ import { annotate, createControl, injectStyles, updateStatus } from '../../ui/co
 import { MAX_RENDERED_CARDS } from '../limits.js';
 import { claimRuntimeInstall } from '../../runtime/install.js';
 import { areOnlyOwnedMutations } from '../../runtime/mutations.js';
+import { captureWaitState, createScanScheduler } from '../../runtime/retailer-lifecycle.js';
 
 /*!
  * Save-On result adapter. Candidate regions are ranked by overlap with current
@@ -15,38 +16,47 @@ import { areOnlyOwnedMutations } from '../../runtime/mutations.js';
 const SOURCE = 'saveon-price-per-unit';
 const VERSION = 2;
 const isProductArray = Array.isArray;
-const installClaimed = claimRuntimeInstall('saveon-content');
 const MAX_API_REVISION = 1_000_000;
 const MAX_API_REVISION_ADVANCE = 10_000;
 const products = new Map();
 const originalOrder = new WeakMap();
 const managedCards = new Map();
 const hiddenPromotions = new Map();
-const state = { dimension: 'auto', direction: 'asc', restored: true, scope: null, revision: 0, timer: null };
+const state = { dimension: 'auto', direction: 'asc', restored: true, scope: null, revision: 0 };
 let apiMessageGeneration = 0;
 
 const storage = () => globalThis[Symbol.for('grocery-price-per-unit.storage.v1')]?.storage;
 const normalizedQuery = (value) => typeof value === 'string' && value.length <= 256
   ? value.trim().normalize('NFKC').replace(/\s+/g, ' ').toLowerCase() || null
   : null;
+const normalizedStoreId = (value) => typeof value === 'string' && value.length <= 80
+  ? value.trim().toLowerCase() || null
+  : null;
 const query = () => normalizedQuery(new URL(location.href).searchParams.get('q'));
 const routeScope = (pathname, value) => value
   ? `${pathname.replace(/\/$/, '')}?q=${encodeURIComponent(value)}`
   : `page:${pathname}${location.search}`;
 const scope = () => routeScope(location.pathname, query());
+export const getSaveOnScope = () => scope();
 let observedScope = scope();
 let scopeWatcher = null;
 let observer = null;
+let lifecycle = null;
+let scheduleScan = null;
 
 function messageScope(context) {
-  const rawQuery = context?.query;
-  const pagePath = context?.pagePath;
-  const value = normalizedQuery(rawQuery);
-  if (!value || typeof pagePath !== 'string' || pagePath.length > 2048) return null;
-  try {
-    const url = new URL(pagePath, location.origin);
-    if (url.origin !== location.origin || normalizedQuery(url.searchParams.get('q')) !== value) return null;
-    return routeScope(url.pathname, value);
+    const rawQuery = context?.query;
+    const rawStoreId = context?.storeId;
+    const pagePath = context?.pagePath;
+    const value = normalizedQuery(rawQuery);
+    const storeId = normalizedStoreId(rawStoreId);
+    if (!value || typeof pagePath !== 'string' || pagePath.length > 2048) return null;
+    try {
+      const url = new URL(pagePath, location.origin);
+      const pathStoreId = normalizedStoreId(url.pathname.match(/\/rsid\/([^/]+)\/results\/?$/i)?.[1]);
+      if (url.origin !== location.origin || normalizedQuery(url.searchParams.get('q')) !== value
+        || (pathStoreId && pathStoreId !== storeId)) return null;
+      return routeScope(url.pathname, value);
   } catch {
     return null;
   }
@@ -93,7 +103,7 @@ function normalizeProduct(value, id) {
   } : null;
 }
 
-if (installClaimed) window.addEventListener('message', (event) => {
+function ingestApiMessage(event) {
   try {
     if (event.source !== window || event.origin !== location.origin) return;
     const transactionGeneration = ++apiMessageGeneration;
@@ -128,12 +138,12 @@ if (installClaimed) window.addEventListener('message', (event) => {
     for (const [id, product] of nextProducts) products.set(id, product);
     state.scope = incomingScope;
     state.revision = revision;
-    schedule();
+    if (!lifecycle?.accept(incomingScope)) schedule({ urgent: true });
   } catch {
     // Reject the complete snapshot transaction when any message-owned getter
     // fails. The previously accepted cache/scope/revision stay authoritative.
   }
-});
+}
 
 function productId(article) {
   return article.dataset.testid?.match(/^ProductCardWrapper-(.+)$/)?.[1] || null;
@@ -257,6 +267,7 @@ function reconcileManagedCards(models = []) {
 
 function ensureControl() {
   return document.getElementById('lups-control') || createControl((action) => {
+    if (action.type === 'reload') return lifecycle?.reload();
     if (action.type === 'restore') state.restored = true;
     else { state.dimension = action.dimension; state.direction = action.direction; state.restored = false; }
     scan();
@@ -272,7 +283,7 @@ function scan() {
     const control = document.getElementById('lups-control');
     if (control) updateStatus(control, state.restored
       ? { total: undefined, excluded: 0, restored: true }
-      : { total: undefined, excluded: 0, dataState: 'pending' });
+      : { total: undefined, excluded: 0, dataState: captureWaitState(lifecycle, scope()) });
     return;
   }
   const control = ensureControl();
@@ -286,7 +297,11 @@ function scan() {
     }
     updateStatus(control, state.restored
       ? { total: grid.models.length, excluded: 0, restored: true }
-      : { total: grid.models.length, excluded: 0, dataState: 'pending' });
+      : {
+        total: grid.models.length,
+        excluded: 0,
+        dataState: captureWaitState(lifecycle, scope())
+      });
     return;
   }
   for (const model of grid.models) {
@@ -300,7 +315,11 @@ function scan() {
   }
   if (state.scope !== scope()) {
     for (const model of grid.models) restoreOrder(model.card);
-    updateStatus(control, { total: grid.models.length, excluded, dataState: 'pending' });
+    updateStatus(control, {
+      total: grid.models.length,
+      excluded,
+      dataState: captureWaitState(lifecycle, scope())
+    });
     return;
   }
   if (!grid.models.some((model) => model.dataSource === 'api')) {
@@ -328,18 +347,15 @@ function scan() {
   });
 }
 
-function schedule() {
-  if (state.timer !== null) return;
-  state.timer = setTimeout(() => {
-    state.timer = null;
-    scan();
-  }, 160);
+function schedule(options) {
+  return scheduleScan?.(options) || false;
 }
 
 function detectScopeChange() {
   const nextScope = scope();
   if (nextScope === observedScope) return;
   observedScope = nextScope;
+  lifecycle?.beginWaiting(nextScope);
   schedule();
 }
 
@@ -367,8 +383,7 @@ async function start() {
     observer?.disconnect();
     window.removeEventListener('scroll', schedule, { capture: true });
     window.removeEventListener('popstate', detectScopeChange);
-    clearTimeout(state.timer);
-    state.timer = null;
+    scheduleScan?.dispose();
     clearInterval(scopeWatcher);
     scopeWatcher = null;
   });
@@ -377,7 +392,14 @@ async function start() {
   });
 }
 
-if (installClaimed) {
+export function installSaveOnRuntime(context = {}) {
+  if (!claimRuntimeInstall('saveon-content')) return false;
+  lifecycle = context.lifecycle || null;
+  scheduleScan = createScanScheduler(window, scan, { delayMs: 160 });
+  lifecycle?.subscribe(() => schedule({ urgent: true }));
+  window.addEventListener('message', ingestApiMessage);
+  window.postMessage({ source: SOURCE, version: VERSION, type: 'api-products-request' }, location.origin);
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start, { once: true });
   else start();
+  return true;
 }

@@ -180,12 +180,20 @@ test('Save-On clears same-query prices across a pickup-route transition', async 
     .filter((item) => item.dataset.name?.startsWith('sponsored-'))
     .every((item) => item.style.display !== 'none'))).toBe(true);
   await page.evaluate(() => document.body.append(...window.__detachedSaveOnLists));
-  await expect(page.locator('#lups-status')).toHaveText('No matching product data in these loaded results · Website order preserved · 3 loaded products · 2 sponsored/ad tiles hidden');
+  await expect(page.locator('#lups-status')).toHaveText('Waiting for current-page product data · Website order preserved · 3 loaded products · 2 sponsored/ad tiles hidden');
   await expect(page.locator('[data-name="sponsored-one"]')).toHaveCSS('display', 'none');
 
   await page.evaluate(() => window.postMessage({
     source: 'saveon-price-per-unit', version: 2, type: 'api-products', mode: 'snapshot', revision: 2,
-    context: { query: 'milk', pagePath: '/sm/pickup/rsid/9999/results?q=milk' },
+    context: { query: 'milk', storeId: '6632', pagePath: '/sm/pickup/rsid/9999/results?q=milk' },
+    products: [{ id: 'milk-high', name: 'Stale-store milk', currentPrice: 1, unitPrice: '$0.10/100ml' }]
+  }, location.origin));
+  await page.waitForTimeout(0);
+  await expect(page.locator('[data-lups-annotation]')).toHaveCount(0);
+
+  await page.evaluate(() => window.postMessage({
+    source: 'saveon-price-per-unit', version: 2, type: 'api-products', mode: 'snapshot', revision: 2,
+    context: { query: 'milk', storeId: '9999', pagePath: '/sm/pickup/rsid/9999/results?q=milk' },
     products: [{ id: 'milk-high', name: 'Milk 1 L', currentPrice: 5, unitPrice: '$0.50/100ml', unitOfSize: { size: 1, abbreviation: 'l' } }]
   }, location.origin));
   await expect(page.locator('[data-lups-annotation]')).toHaveCount(1);

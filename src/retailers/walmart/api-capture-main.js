@@ -4,9 +4,7 @@
  * initiating requests or reading credentials. Sanitized records are scoped to
  * the current route and published only after response/sequence checks pass.
  */
-(function initializeApiCapture(global) {
-    'use strict';
-
+export function installWalmartCapture(global = window) {
     const SOURCE = 'walmart-price-per-unit';
     const VERSION = 2;
     const PRODUCTS_TYPE = 'api-products';
@@ -227,11 +225,15 @@
         const pageLocation = queryAndPageFromUrl(target.location && target.location.href, expectedOrigin);
         const variables = payload && payload.props && payload.props.pageProps &&
             payload.props.pageProps.initialSearchQueryVariables;
+        const variableQuery = normalizeQuery(variables && variables.query);
+        const pageStore = storeIdentityFromPage(target.location && target.location.href, expectedOrigin);
+        const variableStore = storeIdentityFromVariables(variables);
+        if (variableStore.ambiguous || (pageLocation.query && variableQuery && pageLocation.query !== variableQuery)
+            || (pageStore && variableStore.value && pageStore !== variableStore.value)) return null;
         return {
-            query: pageLocation.query ?? normalizeQuery(variables && variables.query),
+            query: variableQuery ?? pageLocation.query,
             page: pageLocation.page ?? normalizePage(variables && variables.page),
-            storeId: storeIdentityFromPage(target.location && target.location.href, expectedOrigin)
-                || storeIdentityFromVariables(variables).value,
+            storeId: variableStore.value || pageStore,
             variablesFingerprint: variablesFingerprint(variables),
             pageUrlAtRequest: pageLocation.pagePath,
             pageUrlAtCapture: pageLocation.pagePath
@@ -548,12 +550,15 @@
             if (!text || text.length > MAX_PRELOADED_TEXT_LENGTH) return false;
             const payload = JSON.parse(text);
             const products = collectItemStackProducts(payload, ['itemsV2', 'items']);
-            channel.ingestItems(
+            const context = initialNextDataContext(target, payload);
+            if (!context) return false;
+            const ingested = channel.ingestItems(
                 products,
-                initialNextDataContext(target, payload),
+                context,
                 0,
                 { authoritative: true }
             );
+            if (!ingested) return false;
             report(target, 'info', 'read initial search products from __NEXT_DATA__', {
                 products: products.length
             });
@@ -718,5 +723,5 @@
     };
 
     void api;
-    if (global) installCapture(global);
-})(typeof window === 'object' ? window : null);
+    return global ? installCapture(global) : false;
+}

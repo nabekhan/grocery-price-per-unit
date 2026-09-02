@@ -2,7 +2,8 @@ import { expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import vm from 'node:vm';
 
-const source = fs.readFileSync('src/retailers/walmart/api-capture-main.js', 'utf8');
+const source = `${fs.readFileSync('src/retailers/walmart/api-capture-main.js', 'utf8')
+  .replace('export function installWalmartCapture', 'function installWalmartCapture')}\ninstallWalmartCapture(window);`;
 
 function installCapture(response, pageUrl = 'https://www.walmart.ca/search?q=milk&store=beta') {
   const nativeFetch = vi.fn(async () => response);
@@ -121,4 +122,23 @@ it('rejects oversized initial Next data before parsing it', () => {
 
   expect(target[Symbol.for('walmart-price-per-unit.api-capture.v1')].captureNextDataOnce()).toBeUndefined();
   expect(coerced).toBe(0);
+});
+
+it('rejects stale initial Next data whose query conflicts with the current page', async () => {
+  const response = { ok: true, status: 200, clone: () => ({ json: async () => ({}) }) };
+  const { target } = installCapture(response);
+  target.document.getElementById = () => ({
+    textContent: JSON.stringify({
+      props: { pageProps: { initialSearchQueryVariables: { query: 'eggs', page: 1, store: 'beta' } } },
+      data: { search: { itemStacks: [{ itemsV2: [{
+        id: 'stale-eggs', name: 'Stale Eggs 12 ct', priceInfo: { currentPrice: { price: 4 } }
+      }] }] } }
+    })
+  });
+
+  target[Symbol.for('walmart-price-per-unit.api-capture.v1')].captureNextDataOnce();
+  await Promise.resolve();
+
+  expect(target.postMessage.mock.calls.map(([message]) => message)
+    .filter((message) => message.type === 'api-products')).toEqual([]);
 });

@@ -1013,6 +1013,35 @@ test('resumes scanning after a persisted Safari page lifecycle', async ({ page }
   await expect(page.locator('#lups-control').getByRole('status')).toHaveCount(1);
 });
 
+test('keeps the control styled when a retailer CSP rejects inline styles', async ({ page }) => {
+  await page.route('https://www.realcanadiansuperstore.ca/csp-fixture*', (route) => route.fulfill({
+    body: fixtureHtml,
+    contentType: 'text/html',
+    headers: { 'Content-Security-Policy': "style-src 'none'" }
+  }));
+  await page.goto('https://www.realcanadiansuperstore.ca/csp-fixture?search-bar=milk');
+  await install(page, INITIAL_TILES, 'milk');
+
+  // Safari reports a CSP violation for the fallback <style>, but the CSSOM
+  // stylesheet must still keep the userscript usable and visually isolated.
+  await expect(page.locator('#lups-control')).toHaveCSS('position', 'fixed');
+  await expect(page.locator('#lups-menu-button')).toHaveCSS('display', 'flex');
+  await expect(page.locator('#lups-menu-button')).toHaveCSS('border-radius', '12px');
+  await expect(page.locator('[data-lups-annotation]').first()).toHaveCSS('border-radius', '999px');
+
+  // A retailer SPA may rebuild <head> and replace the document stylesheet list.
+  // The next ordinary scan must repair both attachment paths without duplicating
+  // the control or requiring a reload.
+  await page.evaluate(() => {
+    document.getElementById('lups-styles')?.remove();
+    document.adoptedStyleSheets = [];
+    document.querySelector('main').append(document.createElement('i'));
+  });
+  await expect(page.locator('#lups-control')).toHaveCSS('position', 'fixed');
+  await expect(page.locator('#lups-menu-button')).toHaveCSS('border-radius', '12px');
+  await expect(page.locator('#lups-control')).toHaveCount(1);
+});
+
 test('disables panel animation when reduced motion is requested', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await openFixture(page);

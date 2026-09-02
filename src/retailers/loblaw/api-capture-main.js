@@ -4,9 +4,7 @@
  * scope, revision order, record breadth, strings, and numeric ranges are
  * validated before a bounded product snapshot reaches the DOM adapter.
  */
-(function initializeLoblawApiCapture(global) {
-  'use strict';
-
+export function installLoblawCapture(global = window) {
   const SOURCE = 'rcss-price-per-unit';
   const VERSION = 2;
   const PRODUCTS_TYPE = 'api-products';
@@ -23,7 +21,7 @@
   const MAX_COMPONENTS = 100;
   const MAX_INSPECTED_PRODUCT_TILES = 2_000;
 
-  if (global[INSTALL_KEY]) return;
+  if (global[INSTALL_KEY]) return false;
   const state = {
     products: {},
     productSequences: {},
@@ -355,4 +353,5 @@
     const message = event.data;
     if (message?.source === SOURCE && message?.version === VERSION && message?.type === REQUEST_TYPE) post();
   });
-})(window);
+  return true;
+}

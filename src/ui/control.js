@@ -468,7 +468,14 @@ function createNativeControl(nativeSection, onChange, state, adapter = {}) {
   restoreButton.setAttribute('aria-label', 'Restore website order');
   restoreButton.hidden = true;
   restoreButton.addEventListener('click', () => choose('restore', { focusButton: true, emit: true }));
-  statusRow.append(status, restoreButton);
+  const reloadButton = document.createElement('button');
+  reloadButton.id = 'lups-reload';
+  reloadButton.type = 'button';
+  reloadButton.textContent = 'Reload page';
+  reloadButton.setAttribute('aria-label', 'Reload page to capture current product data');
+  reloadButton.hidden = true;
+  reloadButton.addEventListener('click', () => onChange({ type: 'reload' }));
+  statusRow.append(status, restoreButton, reloadButton);
   menuHost.append(menu, menuCue);
   inner.append(label, triggerRow, menuHost, select, statusRow, liveStatus);
   root.append(inner);
@@ -493,6 +500,10 @@ export function createControl(onChange, state = { dimension: 'auto', direction: 
 }
 
 export function updateStatus(root, { dimension, sortable, incompatible, unknown, total, excluded = 0, range = null, restored = false, dataState = null }) {
+  // Retailer SPAs can replace <head> after the control has been created. Repair
+  // the shared stylesheet during every render so an existing panel never
+  // degrades into unstyled document flow after a search or store transition.
+  injectStyles();
   const requestedDimension = root.dataset.lupsRequestedDimension;
   const direction = root.dataset.lupsDirection;
   const directionLabel = DIRECTION_LABELS[direction];
@@ -502,8 +513,10 @@ export function updateStatus(root, { dimension, sortable, incompatible, unknown,
   const loadedProducts = Number.isFinite(total) ? `${total} loaded ${total === 1 ? 'product' : 'products'}` : null;
   const preservation = 'Website order preserved';
   const promotions = `${excluded} sponsored/ad ${excluded === 1 ? 'tile' : 'tiles'} hidden`;
-  const transitional = dataState === 'pending'
-    ? ['Waiting for current-page product data', preservation, ...(loadedProducts ? [loadedProducts] : []), ...(excluded ? [promotions] : [])]
+  const transitional = dataState === 'reload-needed'
+    ? ['Current product data was loaded before the userscript', 'Reload once', preservation, ...(loadedProducts ? [loadedProducts] : []), ...(excluded ? [promotions] : [])]
+    : dataState === 'pending'
+      ? ['Waiting for current-page product data', preservation, ...(loadedProducts ? [loadedProducts] : []), ...(excluded ? [promotions] : [])]
     : dataState === 'no-match'
       ? ['No matching product data in these loaded results', preservation, ...(loadedProducts ? [loadedProducts] : []), ...(excluded ? [promotions] : [])]
       : null;
@@ -533,7 +546,8 @@ export function updateStatus(root, { dimension, sortable, incompatible, unknown,
   const announcementStatus = announcementParts.join(' · ');
   if (liveStatus.textContent !== announcementStatus) liveStatus.textContent = announcementStatus;
   root.querySelector('#lups-status-row').hidden = restored && !excluded;
-  root.querySelector('#lups-restore').hidden = restored;
+  root.querySelector('#lups-restore').hidden = restored || dataState === 'reload-needed';
+  root.querySelector('#lups-reload').hidden = dataState !== 'reload-needed';
   root.dataset.lupsRestored = String(restored);
   root.dataset.lupsDataState = dataState || 'ready';
   root.dispatchEvent(new Event('gppu:layout-change'));
@@ -564,11 +578,14 @@ export function annotate(model) {
   }
 }
 
+let adoptedStyleSheet = null;
+
 export function injectStyles() {
-  if (document.getElementById('lups-styles')) return;
-  const style = document.createElement('style');
-  style.id = 'lups-styles';
-  style.textContent = `
+  let style = document.getElementById('lups-styles');
+  if (!style) {
+    style = document.createElement('style');
+    style.id = 'lups-styles';
+    style.textContent = `
     #lups-control[data-lups-floating="true"]{position:fixed!important;z-index:2147483646!important;right:max(18px,env(safe-area-inset-right))!important;bottom:calc(max(18px,env(safe-area-inset-bottom)) + var(--lups-obstruction-lift,0px))!important;margin:0!important;color:#17221d;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;transition:bottom .16s ease-out!important}
     #lups-control[data-lups-floating="true"]>div{position:relative!important;display:flex!important;align-items:flex-end!important;flex-direction:column!important;gap:7px!important}
     #lups-label{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important}
@@ -587,10 +604,10 @@ export function injectStyles() {
     .lups-menu-chevron{box-sizing:border-box!important;width:8px!important;height:8px!important;flex:0 0 auto!important;margin:0 3px 4px 0!important;border-right:2px solid #39735e!important;border-bottom:2px solid #39735e!important;transform:rotate(45deg)!important;transition:transform .15s ease,margin .15s ease!important}
     #lups-menu-button[aria-expanded="true"] .lups-menu-chevron{margin:4px 3px 0 0!important;transform:rotate(225deg)!important}
     #lups-status-row{box-sizing:border-box!important;display:flex!important;max-width:min(360px,calc(100vw - 24px))!important;align-items:center!important;gap:8px!important;padding:7px 8px 7px 10px!important;border:1px solid #d6e3db!important;border-radius:12px!important;background:#fffffff5!important;box-shadow:0 3px 12px #163f2b1a!important;color:#30473d!important}
-    #lups-status-row[hidden],#lups-restore[hidden]{display:none!important}
+    #lups-status-row[hidden],#lups-restore[hidden],#lups-reload[hidden]{display:none!important}
     #lups-status{min-width:0!important;flex:1!important;font:550 11.5px/1.35 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif!important;text-align:left!important}
-    #lups-restore{box-sizing:border-box!important;min-height:44px!important;padding:7px 10px!important;border:1px solid #9eb9a9!important;border-radius:9px!important;background:#edf7f0!important;color:#155f45!important;font:700 11.5px/1.1 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif!important}
-    #lups-restore:hover{border-color:#438a6d!important;background:#e4f3e9!important}
+    #lups-restore,#lups-reload{box-sizing:border-box!important;min-height:44px!important;padding:7px 10px!important;border:1px solid #9eb9a9!important;border-radius:9px!important;background:#edf7f0!important;color:#155f45!important;font:700 11.5px/1.1 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif!important;white-space:nowrap!important}
+    #lups-restore:hover,#lups-reload:hover{border-color:#438a6d!important;background:#e4f3e9!important}
     #lups-control[data-lups-floating="true"] [data-lups-tick][hidden]{display:none!important}
     #lups-menu-host[hidden]{display:none!important}
     #lups-menu-host{box-sizing:border-box!important;top:auto!important;right:0!important;bottom:calc(100% + 8px)!important;width:min(350px,calc(100vw - 24px))!important;min-width:0!important}
@@ -622,7 +639,7 @@ export function injectStyles() {
     @media(max-width:640px){#lups-control[data-lups-floating="true"]{right:max(10px,env(safe-area-inset-right))!important;bottom:calc(max(14px,env(safe-area-inset-bottom)) + var(--lups-obstruction-lift,0px))!important}#lups-menu-button{min-width:0!important;width:196px!important;min-height:44px!important;padding:7px 10px!important;font-size:13px!important}#lups-auto-sort,#lups-flip-direction{min-height:44px!important}#lups-flip-direction{width:44px!important;min-width:44px!important}#lups-menu-button-text{max-width:160px!important}#lups-status-row{max-width:calc(100vw - 20px)!important}#lups-menu-host{position:absolute!important;right:0!important;bottom:calc(100% + 8px)!important;width:calc(100vw - 20px - env(safe-area-inset-left) - env(safe-area-inset-right))!important}#lups-menu{max-height:min(64dvh,calc(100dvh - var(--lups-obstruction-lift,0px) - 150px),520px)!important}}
     @media(forced-colors:active){
       #lups-control[data-lups-floating="true"]{color:CanvasText!important}
-      #lups-menu-button,#lups-auto-sort,#lups-flip-direction,#lups-restore,#lups-status-row,#lups-menu,.lups-guide summary::after{border-color:CanvasText!important;background:Canvas!important;color:CanvasText!important;box-shadow:none!important}
+      #lups-menu-button,#lups-auto-sort,#lups-flip-direction,#lups-restore,#lups-reload,#lups-status-row,#lups-menu,.lups-guide summary::after{border-color:CanvasText!important;background:Canvas!important;color:CanvasText!important;box-shadow:none!important}
       #lups-menu [data-lups-value]{border:2px solid transparent!important;background:Canvas!important;color:CanvasText!important}
       #lups-menu [data-lups-value][aria-checked="true"]{border-color:Highlight!important;background:Highlight!important;color:HighlightText!important}
       #lups-menu [data-lups-value][aria-checked="true"] .lups-option-detail,#lups-menu [data-lups-value][aria-checked="true"] [data-lups-tick]{color:HighlightText!important}
@@ -635,7 +652,7 @@ export function injectStyles() {
       #lups-control :focus-visible{outline:3px solid Highlight!important}
     }
     @media(prefers-contrast:more){
-      #lups-menu-button,#lups-auto-sort,#lups-flip-direction,#lups-restore,#lups-status-row,#lups-menu{border-width:2px!important;box-shadow:none!important}
+      #lups-menu-button,#lups-auto-sort,#lups-flip-direction,#lups-restore,#lups-reload,#lups-status-row,#lups-menu{border-width:2px!important;box-shadow:none!important}
       #lups-menu [data-lups-value][aria-checked="true"]{outline:2px solid currentColor!important;outline-offset:-2px!important}
       .lups-annotation{border-width:2px!important}
       .lups-annotation[data-source="calculated"]{border-style:dashed!important}
@@ -643,6 +660,25 @@ export function injectStyles() {
       #lups-status{font-weight:650!important}
     }
     @media(prefers-reduced-motion:reduce){#lups-control[data-lups-floating="true"],#lups-menu-button,#lups-auto-sort,#lups-flip-direction,.lups-menu-chevron{transition:none!important}}
-  `;
-  document.head.append(style);
+    `;
+    document.head.append(style);
+  }
+
+  // Retailer SPAs may replace <head> and remove the fallback <style>. Safari can
+  // also apply a site's Content Security Policy to styles added by a userscript.
+  // A constructed stylesheet is document-owned, so it survives head replacement
+  // and works under a strict style-src policy. Keep the element for older engines.
+  if (typeof CSSStyleSheet === 'function' && 'adoptedStyleSheets' in document) {
+    try {
+      if (!adoptedStyleSheet) {
+        adoptedStyleSheet = new CSSStyleSheet();
+        adoptedStyleSheet.replaceSync(style.textContent);
+      }
+      if (!document.adoptedStyleSheets.includes(adoptedStyleSheet)) {
+        document.adoptedStyleSheets = [...document.adoptedStyleSheets, adoptedStyleSheet];
+      }
+    } catch {
+      adoptedStyleSheet = null;
+    }
+  }
 }

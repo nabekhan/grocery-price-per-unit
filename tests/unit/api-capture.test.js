@@ -2,7 +2,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 
-const source = fs.readFileSync('src/retailers/loblaw/api-capture-main.js', 'utf8');
+const source = `${fs.readFileSync('src/retailers/loblaw/api-capture-main.js', 'utf8')
+  .replace('export function installLoblawCapture', 'function installLoblawCapture')}\ninstallLoblawCapture(window);`;
 
 const payloadFor = (id, options = {}) => ({
   searchTermSubmitted: options.query || 'milk',

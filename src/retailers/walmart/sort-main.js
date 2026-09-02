@@ -3,6 +3,7 @@ import { createControl, injectStyles, updateStatus } from '../../ui/control.js';
 import { MAX_RENDERED_CARDS, readApiScanModel, readApiScanState } from './scan-state.js';
 import { claimRuntimeInstall } from '../../runtime/install.js';
 import { areOnlyOwnedMutations } from '../../runtime/mutations.js';
+import { captureWaitState, createScanScheduler } from '../../runtime/retailer-lifecycle.js';
 
 /*!
  * Walmart grid sorter. It consumes only bundle-private API-backed card models,
@@ -11,11 +12,13 @@ import { areOnlyOwnedMutations } from '../../runtime/mutations.js';
  * ad siblings/wrappers; ambiguous nodes fail open.
  */
 
-const state = { dimension: 'auto', direction: 'asc', restored: true, timer: null };
-const installClaimed = claimRuntimeInstall('walmart-sort');
+const state = { dimension: 'auto', direction: 'asc', restored: true };
 const hiddenBySorter = new Map();
 const originalOrders = new WeakMap();
 const managedWrappers = new Set();
+let lifecycle = null;
+let scheduleScan = null;
+let observer = null;
 
 function userscriptStorage() {
   return globalThis[Symbol.for('grocery-price-per-unit.storage.v1')]?.storage;
@@ -154,6 +157,7 @@ function ensureControl() {
   let control = document.getElementById('lups-control');
   if (control) return control;
   control = createControl((action) => {
+    if (action.type === 'reload') return lifecycle?.reload();
     if (action.type === 'restore') state.restored = true;
     else {
       state.dimension = action.dimension;
@@ -172,14 +176,20 @@ function scan() {
   if (!found) {
     reconcileManagedWrappers();
     const existingControl = document.getElementById('lups-control');
-    if (existingControl && !state.restored) updateStatus(existingControl, { total: undefined, dataState: 'pending' });
+    if (existingControl && !state.restored) updateStatus(existingControl, {
+      total: undefined,
+      dataState: captureWaitState(lifecycle)
+    });
     return;
   }
   const [grid] = found;
   if (grid.children.length > MAX_RENDERED_CARDS) {
     reconcileManagedWrappers();
     const existingControl = document.getElementById('lups-control');
-    if (existingControl && !state.restored) updateStatus(existingControl, { total: undefined, dataState: 'pending' });
+    if (existingControl && !state.restored) updateStatus(existingControl, {
+      total: undefined,
+      dataState: captureWaitState(lifecycle)
+    });
     return;
   }
   const control = ensureControl();
@@ -201,7 +211,11 @@ function scan() {
   }
   if (!apiScan || apiScan.accepted !== true) {
     for (const model of models) restoreOrder(model.card);
-    updateStatus(control, { total: loaded, excluded, dataState: 'pending' });
+    updateStatus(control, {
+      total: loaded,
+      excluded,
+      dataState: captureWaitState(lifecycle)
+    });
     return;
   }
   if (apiScan.apiCards === 0 || !models.some((model) => model.matched)) {
@@ -223,12 +237,8 @@ function scan() {
   updateStatus(control, { dimension: sorted.dimension, sortable, incompatible, unknown, total: loaded, excluded, range: sorted.range });
 }
 
-function schedule() {
-  if (state.timer !== null) return;
-  state.timer = setTimeout(() => {
-    state.timer = null;
-    scan();
-  }, 150);
+function schedule(options) {
+  return scheduleScan?.(options) || false;
 }
 
 function sorterNode(node) {
@@ -267,14 +277,24 @@ async function start() {
     document.getElementById('lups-control')?.remove();
     schedule();
   });
-  const observer = new MutationObserver((records) => {
+  observer = new MutationObserver((records) => {
     if (areOnlyOwnedMutations(records, sorterMutation)) return;
     schedule();
   });
   observer.observe(document.body, { attributes: true, attributeFilter: ['class', 'hidden', 'data-item-id'], childList: true, subtree: true });
+  window.addEventListener('pagehide', (event) => {
+    if (event.persisted) return;
+    observer?.disconnect();
+    scheduleScan?.dispose();
+  });
 }
 
-if (installClaimed) {
+export function installWalmartSorter(context = {}) {
+  if (!claimRuntimeInstall('walmart-sort')) return false;
+  lifecycle = context.lifecycle || null;
+  scheduleScan = createScanScheduler(window, scan, { delayMs: 150 });
+  lifecycle?.subscribe(() => schedule({ urgent: true }));
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start, { once: true });
   else start();
+  return true;
 }

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it } from 'vitest';
-import { annotate } from '../../src/ui/control.js';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { annotate, createControl, updateStatus } from '../../src/ui/control.js';
 
 describe('unit-price annotation lifecycle', () => {
   let card;
@@ -36,5 +36,39 @@ describe('unit-price annotation lifecycle', () => {
     expect(note.dataset.source).toBe('retailer');
     expect(note.title).toBe('Unit price supplied by the retailer API');
     expect(note.getAttribute('aria-label')).toBe('$1.60 per litre, unit price supplied by the retailer API');
+  });
+});
+
+describe('reload recovery control', () => {
+  beforeEach(() => {
+    document.body.innerHTML = '';
+    vi.stubGlobal('requestAnimationFrame', () => 1);
+  });
+
+  afterEach(() => {
+    document.getElementById('lups-control')?.remove();
+    vi.unstubAllGlobals();
+  });
+
+  it('shows the bounded recovery message and reload action only when needed', () => {
+    const onChange = vi.fn();
+    const control = createControl(onChange, { dimension: 'auto', direction: 'asc', restored: false });
+
+    updateStatus(control, { total: 16, excluded: 2, dataState: 'reload-needed' });
+
+    expect(control.dataset.lupsDataState).toBe('reload-needed');
+    expect(control.querySelector('#lups-status').textContent).toBe(
+      'Current product data was loaded before the userscript · Reload once · Website order preserved · 16 loaded products · 2 sponsored/ad tiles hidden'
+    );
+    expect(control.querySelector('#lups-live-status').textContent).toBe(
+      'Current product data was loaded before the userscript · Reload once · Website order preserved · 16 loaded products · 2 sponsored/ad tiles hidden'
+    );
+    expect(control.querySelector('#lups-restore').hidden).toBe(true);
+    const reload = control.querySelector('#lups-reload');
+    expect(reload.hidden).toBe(false);
+    onChange.mockClear();
+    reload.click();
+    expect(onChange).toHaveBeenCalledOnce();
+    expect(onChange).toHaveBeenCalledWith({ type: 'reload' });
   });
 });

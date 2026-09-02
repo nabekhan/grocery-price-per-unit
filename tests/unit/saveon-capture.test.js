@@ -2,7 +2,8 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 
-const source = fs.readFileSync('src/retailers/saveon/api-capture-main.js', 'utf8');
+const source = `${fs.readFileSync('src/retailers/saveon/api-capture-main.js', 'utf8')
+  .replace('export function installSaveOnCapture', 'function installSaveOnCapture')}\ninstallSaveOnCapture(window);`;
 
 beforeEach(() => {
   window.history.replaceState({}, '', '/sm/pickup/rsid/6632/results?q=eggs');
@@ -25,6 +26,27 @@ it('stops the bootstrap retry when the page is handed off', async () => {
   expect(clearInterval).toHaveBeenCalledTimes(1);
   await new Promise((resolve) => setTimeout(resolve, 70));
   expect(clearInterval).toHaveBeenCalledTimes(1);
+});
+
+it('does not synthesize an empty snapshot when installed after current data loaded', async () => {
+  const snapshots = [];
+  const collectSnapshot = (event) => {
+    if (event.data?.source === 'saveon-price-per-unit' && event.data?.type === 'api-products') {
+      snapshots.push(event.data);
+    }
+  };
+  window.addEventListener('message', collectSnapshot);
+  window.eval(source);
+  window.dispatchEvent(new MessageEvent('message', {
+    source: window,
+    origin: window.location.origin,
+    data: { source: 'saveon-price-per-unit', version: 2, type: 'api-products-request' }
+  }));
+  await Promise.resolve();
+  window.removeEventListener('message', collectSnapshot);
+
+  expect(snapshots).toEqual([]);
+  expect(window[Symbol.for('saveon-price-per-unit.api-capture.v1')].verifiedSnapshot).toBe(false);
 });
 
 it('preserves Save-On prices and normalizes its per-item API notation', async () => {

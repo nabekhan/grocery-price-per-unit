@@ -4,15 +4,14 @@
  * filter, and request sequence. Bootstrap/first/later-page records are bounded
  * and sanitized; this observer never initiates a retailer request.
  */
-(function initializeSaveOnCapture(global) {
-  'use strict';
+export function installSaveOnCapture(global = window) {
   const SOURCE = 'saveon-price-per-unit';
   const VERSION = 2;
   const MAX_CAPTURED_PRODUCTS = 500;
   const MAX_WALK_NODES = 5000;
   const MAX_CONTAINER_ENTRIES = 500;
   const INSTALL_KEY = Symbol.for('saveon-price-per-unit.api-capture.v1');
-  if (global[INSTALL_KEY]) return;
+  if (global[INSTALL_KEY]) return false;
   const state = {
     products: {},
     productSequences: {},
@@ -23,7 +22,8 @@
     activeContext: null,
     latestRequestScope: null,
     latestRequestSequence: 0,
-    preloadedRead: false
+    preloadedRead: false,
+    verifiedSnapshot: false
   };
   global[INSTALL_KEY] = state;
 
@@ -151,6 +151,7 @@
     state.activeContext = context;
     state.products = {};
     state.productSequences = {};
+    state.verifiedSnapshot = false;
   }
 
   function sanitize(raw) {
@@ -217,6 +218,7 @@
     state.products = Object.fromEntries(keptIds.map((id) => [id, state.products[id]]));
     state.productSequences = Object.fromEntries(keptIds.map((id) => [id, state.productSequences[id]]));
     state.activeContext = context;
+    state.verifiedSnapshot = true;
     post(context, 'snapshot');
     return true;
   }
@@ -363,14 +365,14 @@
       if (!readPreloaded()) {
         const context = defaultFilterContext(pageContext());
         if (context) {
-          if (state.pageScope === context.pageScope && state.activeContext) post(state.activeContext);
+          if (state.pageScope === context.pageScope && state.activeContext && state.verifiedSnapshot) post(state.activeContext);
           else {
             const initialContext = { ...context, sequence: 0, isLaterPage: false };
             useScope(initialContext);
-            post(initialContext);
           }
         }
       }
     }
   });
-})(window);
+  return true;
+}

@@ -3,6 +3,7 @@ import { isSortableTotalPrice, sortModels } from '../../sorting/sort.js';
 import { annotate, createControl, injectStyles, updateStatus } from '../../ui/control.js';
 import { claimRuntimeInstall } from '../../runtime/install.js';
 import { areOnlyOwnedMutations } from '../../runtime/mutations.js';
+import { captureWaitState, createScanScheduler } from '../../runtime/retailer-lifecycle.js';
 
 /*!
  * Superstore/No Frills DOM adapter. Accepted API snapshots stay scoped to the
@@ -11,8 +12,7 @@ import { areOnlyOwnedMutations } from '../../runtime/mutations.js';
  * classified promotions are owned reversibly and released on stale state.
  */
 
-const state = { dimension: 'auto', direction: 'asc', restored: true, observer: null, timer: null };
-const installClaimed = claimRuntimeInstall('loblaw-content');
+const state = { dimension: 'auto', direction: 'asc', restored: true, observer: null };
 const originalLocations = new Map();
 const managedCards = new Set();
 const hiddenPromotions = new Map();
@@ -21,6 +21,8 @@ let apiScope = null;
 let apiRevision = 0;
 let observedScope = currentScope();
 let scopeWatcher = null;
+let lifecycle = null;
+let scheduleScan = null;
 const debug = false;
 const log = (...args) => { if (debug) console.info('[Grocery Price Per Unit: Loblaw]', ...args); };
 
@@ -66,6 +68,10 @@ function currentScope() {
   const url = new URL(location.href);
   const query = normalizedQuery(url.searchParams.get('search-bar'));
   return scopedPage(query, normalizedStoreId(url.searchParams.get('storeId')), `${url.pathname}${url.search}`);
+}
+
+export function getLoblawScope() {
+  return currentScope();
 }
 
 function normalizeApiProduct(value, id) {
@@ -141,15 +147,10 @@ function ingestApiMessage(event) {
     apiScope = scope;
     apiRevision = revision;
     log('accepted API products', { products: apiProducts.size, revision: apiRevision, scope });
-    schedule();
+    if (!lifecycle?.accept(scope)) schedule({ urgent: true });
   } catch (error) {
     log('Rejected malformed API product snapshot', error);
   }
-}
-
-if (installClaimed) {
-  window.addEventListener('message', ingestApiMessage);
-  window.postMessage({ source: API_SOURCE, version: API_VERSION, type: 'api-products-request' }, location.origin);
 }
 
 async function loadDefaultMode() {
@@ -165,6 +166,7 @@ function ensureControl() {
   let control = document.getElementById('lups-control');
   if (control) return control;
   control = createControl((action) => {
+    if (action.type === 'reload') return lifecycle?.reload();
     if (action.type === 'restore') state.restored = true;
     if (action.type === 'sort') { state.dimension = action.dimension; state.direction = action.direction; state.restored = false; }
     scan();
@@ -316,7 +318,7 @@ function scan() {
     const control = document.getElementById('lups-control');
     if (control) updateStatus(control, state.restored
       ? { total: undefined, excluded: 0, restored: true }
-      : { total: undefined, excluded: 0, dataState: 'pending' });
+      : { total: undefined, excluded: 0, dataState: captureWaitState(lifecycle, scope) });
     return;
   }
   reconcileManagedCards(grid.models);
@@ -333,7 +335,11 @@ function scan() {
   if (state.restored) return restore(models, control, excludedCards.size);
   if (apiScope !== scope) {
     restoreOrdering();
-    updateStatus(control, { total: models.length, excluded: excludedCards.size, dataState: 'pending' });
+    updateStatus(control, {
+      total: models.length,
+      excluded: excludedCards.size,
+      dataState: captureWaitState(lifecycle, scope)
+    });
     return;
   }
   if (!models.some((model) => model.dataSource === 'api')) {
@@ -351,18 +357,15 @@ function scan() {
   log('scan', { dimension: sorted.dimension, sortable, incompatible, unknown });
 }
 
-function schedule() {
-  if (state.timer !== null) return;
-  state.timer = setTimeout(() => {
-    state.timer = null;
-    scan();
-  }, 180);
+function schedule(options) {
+  return scheduleScan?.(options) || false;
 }
 
 function detectScopeChange() {
   const nextScope = currentScope();
   if (nextScope === observedScope) return;
   observedScope = nextScope;
+  lifecycle?.beginWaiting(nextScope);
   schedule();
 }
 
@@ -394,8 +397,7 @@ async function start() {
     state.observer?.disconnect();
     window.removeEventListener('scroll', schedule, { capture: true });
     window.removeEventListener('popstate', detectScopeChange);
-    clearTimeout(state.timer);
-    state.timer = null;
+    scheduleScan?.dispose();
     clearInterval(scopeWatcher);
     scopeWatcher = null;
   });
@@ -404,7 +406,14 @@ async function start() {
   });
 }
 
-if (installClaimed) {
+export function installLoblawRuntime(context = {}) {
+  if (!claimRuntimeInstall('loblaw-content')) return false;
+  lifecycle = context.lifecycle || null;
+  scheduleScan = createScanScheduler(window, scan, { delayMs: 180 });
+  lifecycle?.subscribe(() => schedule({ urgent: true }));
+  window.addEventListener('message', ingestApiMessage);
+  window.postMessage({ source: API_SOURCE, version: API_VERSION, type: 'api-products-request' }, location.origin);
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start, { once: true });
   else start();
+  return true;
 }
