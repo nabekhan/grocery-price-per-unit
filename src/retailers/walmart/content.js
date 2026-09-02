@@ -1012,6 +1012,8 @@ function processProducts(isForced = false, apiReport = null) {
                 trustedModels.push({
                     card: container,
                     matched: Boolean(apiProduct),
+                    productId,
+                    name: apiProduct?.name || null,
                     normalizedUnitPrice: Number(container.dataset.ppuSortValue),
                     currentPrice: Number(container.dataset.ppuTotalPrice),
                     dimension: container.dataset.ppuSortDimension
@@ -1028,7 +1030,7 @@ function processProducts(isForced = false, apiReport = null) {
                 const nextState = ownedStateSignature(container);
                 weakMapSet(processedStates, container, nextState);
                 exposedStateChanged ||= previousState !== nextState;
-                trustedModels.push({ card: container, matched: false });
+                trustedModels.push({ card: container, matched: false, productId, name: null });
                 return;
             }
 
@@ -1056,6 +1058,8 @@ function processProducts(isForced = false, apiReport = null) {
             trustedModels.push({
                 card: container,
                 matched: true,
+                productId,
+                name: apiProduct.name,
                 normalizedUnitPrice: Number(container.dataset.ppuSortValue),
                 currentPrice: Number(container.dataset.ppuTotalPrice),
                 dimension: container.dataset.ppuSortDimension
@@ -1068,7 +1072,12 @@ function processProducts(isForced = false, apiReport = null) {
                 weakMapDelete(processedSignatures, container);
                 weakMapDelete(processedStates, container);
                 exposedStateChanged ||= previousState !== ownedStateSignature(container);
-                trustedModels.push({ card: container, matched: false });
+                trustedModels.push({
+                    card: container,
+                    matched: false,
+                    productId: container.getAttribute('data-item-id') || null,
+                    name: null
+                });
                 scan.errors += 1;
                 reportApiStatus('error', 'failed to process a product card', {
                     productId: container.getAttribute('data-item-id') || null,

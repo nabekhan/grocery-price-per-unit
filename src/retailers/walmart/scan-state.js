@@ -22,11 +22,15 @@ let publishedState = null;
 
 const positiveNumber = (value, maximum) => typeof value === 'number'
   && numberIsFinite(value) && value > 0 && value <= maximum ? value : null;
+const boundedString = (value, maximum) => typeof value === 'string' && value.length > 0
+  && value.length <= maximum ? value : null;
 
 function modelForEntry(entry) {
   if (!entry?.card || (typeof entry.card !== 'object' && typeof entry.card !== 'function')) return null;
   return freeze({
     matched: entry.matched === true,
+    productId: boundedString(entry.productId, 160),
+    name: boundedString(entry.name, 1_500),
     normalizedUnitPrice: positiveNumber(entry.normalizedUnitPrice, 1_000_000_000),
     currentPrice: positiveNumber(entry.currentPrice, 1_000_000),
     dimension: setHas(DIMENSIONS, entry.dimension) ? entry.dimension : null
