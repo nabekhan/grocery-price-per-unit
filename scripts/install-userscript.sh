@@ -43,13 +43,20 @@ committed=0
 had_destination=0
 installed_identity=''
 
+file_identity() {
+  case $(uname -s 2>/dev/null || true) in
+    Darwin) /usr/bin/stat -f '%d:%i' "$1" ;;
+    *) /usr/bin/stat -c '%d:%i' "$1" ;;
+  esac
+}
+
 rollback() {
   original_status=$?
   trap - EXIT HUP INT TERM
   set +e
   [ ! -e "$temporary_copy" ] || /bin/rm -f "$temporary_copy"
   if [ "$mutation_started" -eq 1 ] && [ "$committed" -eq 0 ]; then
-    current_identity=$(/usr/bin/stat -f '%d:%i' "$destination" 2>/dev/null || true)
+    current_identity=$(file_identity "$destination" 2>/dev/null || true)
     if [ -z "$installed_identity" ] || [ "$current_identity" != "$installed_identity" ] ||
       ! /usr/bin/cmp -s "$destination" "$source_userscript"; then
       echo "Install failed, but the destination changed outside this installer; preserving it and the backup for manual recovery: $destination" >&2
@@ -122,7 +129,7 @@ if [ -e "$temporary_copy" ] || [ ! -f "$destination" ] || [ -L "$destination" ];
   exit 1
 fi
 mutation_started=1
-installed_identity=$(/usr/bin/stat -f '%d:%i' "$destination")
+installed_identity=$(file_identity "$destination")
 node scripts/verify-release.mjs --require-recorded --installed "$destination"
 committed=1
 trap - EXIT HUP INT TERM

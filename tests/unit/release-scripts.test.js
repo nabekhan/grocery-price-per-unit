@@ -85,7 +85,9 @@ it('verifies a temporary userscript before atomic replacement and preserves the 
   expect(installScript).toContain("destination_basename=$(basename -- \"$destination\")");
   expect(installScript).toContain('pwd -P');
   expect(installScript).toContain("[ -L \"$destination\" ]");
-  expect(installScript.indexOf("installed_identity=$(/usr/bin/stat -f '%d:%i' \"$destination\")")).toBeGreaterThan(replacement);
+  expect(installScript).toContain("Darwin) /usr/bin/stat -f '%d:%i' \"$1\"");
+  expect(installScript).toContain("*) /usr/bin/stat -c '%d:%i' \"$1\"");
+  expect(installScript.indexOf('installed_identity=$(file_identity "$destination")')).toBeGreaterThan(replacement);
   expect(installScript.indexOf('node scripts/verify-release.mjs --require-recorded --installed "$destination"')).toBeGreaterThan(replacement);
 });
 
