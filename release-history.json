@@ -29,6 +29,9 @@
     },
     "2.2.0": {
       "userscriptSha256": "22da0ec36e12dda83807f00c76c971ab76e4fb0aa4c5fea2dd13303149e5a64f"
+    },
+    "2.2.1": {
+      "userscriptSha256": "33f12c5c302d27e7ad420d911f6f9e7d13f6827a8ea733084282b50447e286bf"
     }
   }
 }

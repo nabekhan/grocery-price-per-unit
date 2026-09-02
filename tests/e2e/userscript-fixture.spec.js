@@ -548,7 +548,7 @@ test('Walmart userscript starts at document-start and carries captured API data 
   expect(pageErrors).toEqual([]);
 });
 
-test('Walmart cart builder previews, explicitly adds, resumes, and verifies the selected product', async ({ page }) => {
+test('Walmart cart builder never falls back to page navigation or DOM cart controls', async ({ page }) => {
   const pageErrors = [];
   page.on('pageerror', (error) => pageErrors.push(error.message));
   await page.addInitScript({ content: userscript });
@@ -588,12 +588,8 @@ test('Walmart cart builder previews, explicitly adds, resumes, and verifies the 
         });
       </script>`
   }));
-  await page.route('https://www.walmart.ca/en/cart', (route) => route.fulfill({
-    contentType: 'text/html',
-    body: '<!doctype html><main data-testid="cart-item"><a href="/en/ip/first-page-bananas/lazy-bananas">First-page bananas</a></main>'
-  }));
-
-  await page.goto('https://www.walmart.ca/shopping-list-fixture/search?q=bananas');
+  const startUrl = 'https://www.walmart.ca/shopping-list-fixture/search?q=bananas';
+  await page.goto(startUrl);
   await page.locator('#lups-menu-button').hover();
   await expect(page.locator('#gppu-shopping-toggle')).toBeVisible();
   await page.waitForFunction(() => document.getAnimations()
@@ -610,26 +606,18 @@ test('Walmart cart builder previews, explicitly adds, resumes, and verifies the 
   await page.locator('#gppu-shopping-input').fill('bananas');
   await page.getByRole('button', { name: 'Preview items' }).click();
 
-  await expect(page.getByRole('button', { name: 'Add', exact: true })).toBeVisible({ timeout: 8_000 });
+  await expect(page.getByRole('button', { name: 'Retry', exact: true })).toBeVisible({ timeout: 8_000 });
   await expect(page.getByRole('heading', { name: 'Cart builder' })).toHaveCount(0);
-  await expect(page.locator('#gppu-shopping-status')).toBeHidden();
-  await expect(page.locator('#gppu-shopping-results strong')).toHaveText(['bananas']);
-  // Planning now ranks the complete captured API snapshot without scrolling
-  // the virtualized grid. The lazy card is only requested in the explicit Add
-  // phase, when the exact product/control must be revalidated.
+  await expect(page.locator('#gppu-shopping-status')).toContainText('Walmart search API is unavailable.');
+  await expect(page).toHaveURL(startUrl);
+  // A captured snapshot may still power the price sorter, but Cart Builder no
+  // longer scrolls or clicks it as a fallback when no active API exists.
   expect(await page.evaluate(() => window.__gppuLazyProductLoaded)).toBeUndefined();
-  await expect(page.locator('#gppu-shopping-results')).toContainText('First-page bananas 1 kg · $1.00');
   await expect(page.locator('[aria-label="Quantity increase"]')).toHaveCount(0);
   await page.screenshot({
     path: path.join(root, 'artifacts/screenshots/shopping-list/walmart-preview.png'),
     fullPage: false
   });
-  await page.getByRole('button', { name: 'Add', exact: true }).click();
-
-  await expect(page).toHaveURL('https://www.walmart.ca/en/cart');
-  await expect(page.locator('#gppu-shopping-status')).toBeHidden({ timeout: 8_000 });
-  await expect(page.locator('#gppu-shopping-results')).toContainText('bananas — added');
-  await expect(page.locator('a[href*="lazy-bananas"]')).toHaveCount(1);
   expect(pageErrors).toEqual([]);
 });
 
@@ -637,12 +625,13 @@ for (const storefront of [
   { name: 'Superstore', host: 'www.realcanadiansuperstore.ca' },
   { name: 'No Frills', host: 'www.nofrills.ca' }
 ]) {
-  test(`${storefront.name} cart builder uses the shared persisted workflow`, async ({ page }) => {
+  test(`${storefront.name} cart builder completes through APIs without navigating`, async ({ page }) => {
     const pageErrors = [];
+    let cartProductId = null;
     page.on('pageerror', (error) => pageErrors.push(error.message));
     await page.addInitScript({ content: userscript });
-    const searchUrl = `https://${storefront.host}/cart-list-fixture/search?search-bar=milk`;
-    const nextDataForCart = JSON.stringify({ props: { pageProps: {
+    const searchUrl = `https://${storefront.host}/cart-list-fixture/search?search-bar=milk&storeId=fixture-store&cartId=cart_fixture`;
+    const searchPayload = { props: { pageProps: {
       initialSearchData: {
         searchTermSubmitted: 'milk',
         layout: { sections: { mainContentCollection: { components: [{ data: { productTiles: [
@@ -651,7 +640,9 @@ for (const storefront of [
           { productId: 'medium-milk', title: 'Medium milk 1 L', packageSizing: '1 L', pricing: { price: '3.00' } }
         ] } }] } } }
       }
-    } } }).replaceAll('<', '\\u003c');
+    } } };
+    const nextDataForCart = JSON.stringify({ buildId: 'fixture-build', ...searchPayload })
+      .replaceAll('<', '\\u003c');
     await page.route(`https://${storefront.host}/cart-list-fixture/**`, (route) => route.fulfill({
       contentType: 'text/html',
       body: `<!doctype html><main data-testid="listing-page-container"><section data-testid="product-grid-component">
@@ -660,11 +651,33 @@ for (const storefront of [
         <article><div data-testid="product-image"></div><a href="/product/medium-milk">Medium milk</a><button>Add medium milk</button></article>
       </section></main><script id="__NEXT_DATA__" type="application/json">${nextDataForCart}</script>`
     }));
-    await page.route(`https://${storefront.host}/en/cartReview`, (route) => route.fulfill({
-      contentType: 'text/html',
-    body: '<!doctype html><main><article data-testid="cart-item"><a href="/product/bulk-milk">Bulk milk</a></article><aside><a href="/product/single-milk">Recommended milk</a></aside></main>'
+    await page.route(`https://${storefront.host}/_next/data/fixture-build/en/search.json*`, (route) => route.fulfill({
+      contentType: 'application/json', body: JSON.stringify(searchPayload)
     }));
-
+    await page.route('https://api.pcexpress.ca/pcx-bff/api/v1/carts/cart_fixture', async (route) => {
+      const cors = {
+        'access-control-allow-origin': `https://${storefront.host}`,
+        'access-control-allow-credentials': 'true',
+        'access-control-allow-methods': 'GET,POST,OPTIONS',
+        'access-control-allow-headers': [
+          'accept', 'accept-language', 'basesiteid', 'business-user-agent', 'content-type',
+          'is-helios-account', 'is-iceberg-enabled', 'site-banner', 'x-apikey',
+          'x-application-type', 'x-channel', 'x-loblaw-tenant-id'
+        ].join(',')
+      };
+      if (route.request().method() === 'OPTIONS') {
+        await route.fulfill({ status: 204, headers: cors });
+        return;
+      }
+      if (route.request().method() === 'POST') {
+        cartProductId = Object.keys(route.request().postDataJSON()?.entries || {})[0] || null;
+      }
+      const entries = cartProductId ? [{ quantity: 1, offer: { id: cartProductId } }] : [];
+      await route.fulfill({
+        contentType: 'application/json', headers: cors,
+        body: JSON.stringify({ cart: { storeId: 'fixture-store', orders: [{ entries }] } })
+      });
+    });
     await page.goto(searchUrl);
     await expect(page.locator('[data-lups-annotation]')).toHaveCount(3);
     await page.locator('#lups-menu-button').hover();
@@ -673,15 +686,17 @@ for (const storefront of [
     await page.getByRole('button', { name: 'Preview items' }).click();
     await expect(page.getByRole('button', { name: 'Add', exact: true })).toBeVisible({ timeout: 8_000 });
     await expect(page.locator('#gppu-shopping-results')).toContainText('Bulk milk 4 L · $6.00 · $1.50/L');
+    await expect(page.locator('[aria-label="Quantity increase"]')).toHaveCount(0);
     await page.getByRole('button', { name: 'Add', exact: true }).click();
-    await expect(page).toHaveURL(`https://${storefront.host}/en/cartReview`);
-    await expect(page.locator('#gppu-shopping-status')).toBeHidden({ timeout: 8_000 });
     await expect(page.locator('#gppu-shopping-results')).toContainText('milk — added');
+    await expect(page).toHaveURL(searchUrl);
+    expect(cartProductId).toBe('bulk-milk');
+    await expect(page.locator('[aria-label="Quantity increase"]')).toHaveCount(0);
     expect(pageErrors).toEqual([]);
   });
 }
 
-test('Save-On cart builder preserves the fulfillment store through cart review', async ({ page }) => {
+test('Save-On cart builder queries the API and stops in-place without a cart API', async ({ page }) => {
   const pageErrors = [];
   page.on('pageerror', (error) => pageErrors.push(error.message));
   await page.addInitScript({ content: userscript });
@@ -702,12 +717,8 @@ test('Save-On cart builder preserves the fulfillment store through cart review',
         <li class="wrapper"><article data-testid="ProductCardWrapper-medium-milk"><button>Add medium milk</button></article></li>
       </ul>`
   }));
-  await page.route('https://www.saveonfoods.com/sm/pickup/rsid/6632/cart', (route) => route.fulfill({
-    contentType: 'text/html',
-    body: '<!doctype html><main><article data-testid="CartItem-bulk-milk"><a href="/product/milk?sku=bulk-milk">Bulk milk</a></article><aside><a href="/product/milk?sku=single-milk">Recommended milk</a></aside></main>'
-  }));
-
-  await page.goto('https://www.saveonfoods.com/sm/pickup/rsid/6632/results?q=milk');
+  const startUrl = 'https://www.saveonfoods.com/sm/pickup/rsid/6632/results?q=milk';
+  await page.goto(startUrl);
   await page.evaluate(() => window.postMessage({
     source: 'saveon-price-per-unit', version: 2, type: 'api-products', mode: 'snapshot', revision: 1,
     context: { query: 'milk', storeId: '6632', pagePath: '/sm/pickup/rsid/6632/results?q=milk' },
@@ -725,8 +736,10 @@ test('Save-On cart builder preserves the fulfillment store through cart review',
   await expect(page.getByRole('button', { name: 'Add', exact: true })).toBeVisible({ timeout: 8_000 });
   await expect(page.locator('#gppu-shopping-results')).toContainText('Bulk milk 4 L · $6.00 · $1.50/L');
   await page.getByRole('button', { name: 'Add', exact: true }).click();
-  await expect(page).toHaveURL('https://www.saveonfoods.com/sm/pickup/rsid/6632/cart');
-  await expect(page.locator('#gppu-shopping-status')).toBeHidden({ timeout: 8_000 });
+  await expect(page.getByRole('button', { name: 'Retry', exact: true })).toBeVisible({ timeout: 8_000 });
+  await expect(page.locator('#gppu-shopping-status')).toContainText('Save-On-Foods cart API is unavailable.');
+  await expect(page).toHaveURL(startUrl);
+  await expect(page.locator('[aria-label="Quantity increase"]')).toHaveCount(0);
   expect(pageErrors).toEqual([]);
 });
 

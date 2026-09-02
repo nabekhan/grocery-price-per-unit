@@ -3,23 +3,23 @@ import { sortModels } from '../sorting/sort.js';
 /*!
  * Shared shopping-list workflow.
  *
- * This module owns the reusable parts of a multi-page cart run: parsing the
+ * This module owns the reusable parts of an API-only cart run: parsing the
  * shopper's list, validating and persisting progress, presenting one compact
- * control, resuming after navigation, and producing a final per-item report.
- * Retailer code supplies search URLs, product collection, exact Add-button
- * behavior, blocking-dialog detection, and cart reconciliation.
+ * control, retrying temporarily unavailable operations, and producing a final
+ * per-item report. Retailer code supplies verified product search, exact cart
+ * mutation, cart reconciliation, and blocking-dialog detection.
  *
  * The runner never checks out, removes existing cart items, bypasses human
  * verification, or trusts persisted data without bounding it. A shopper must
  * explicitly preview a list and explicitly start its Add phase.
  */
 
-// V4 deliberately invalidates candidates saved by the earlier page-navigation
+// V5 deliberately invalidates candidates saved by the earlier page-navigation
 // and price-only matching workflows. Those candidates could have come from a
 // stale SPA snapshot or a loosely related search result, so an upgraded run
 // must preview them again through the scoped API and shared relevance gate.
-export const SHOPPING_RUN_STORAGE_KEY = 'shoppingListRunV4';
-const RUN_VERSION = 4;
+export const SHOPPING_RUN_STORAGE_KEY = 'shoppingListRunV5';
+const RUN_VERSION = 5;
 const MAX_ITEMS = 40;
 const MAX_QUERY_LENGTH = 120;
 const MAX_REASON_LENGTH = 240;
@@ -348,7 +348,7 @@ export function createShoppingListRunner({ retailerId, adapter }) {
       results.append(row);
     }
     if (run.phase === 'ready-to-add') actionButton('Add', startAdding);
-    if (run.phase === 'paused') actionButton('I resolved it — continue', continueRun);
+    if (run.phase === 'paused') actionButton('Retry', continueRun);
     if (run.phase === 'complete') actionButton('Start another list', resetRun);
     actionButton('Cancel', cancelRun, true);
   }
@@ -430,63 +430,31 @@ export function createShoppingListRunner({ retailerId, adapter }) {
     }
     const blocked = adapter.blockingReason?.();
     if (blocked) return pause(blocked, 'planning');
-    // Retailers may expose a documented/public product search endpoint. A
-    // read-only query previews each list item without navigating a storefront
-    // page (and therefore without loading its product-grid media). Failure is
-    // deliberately non-fatal: the established current-page capture path stays
-    // available as a conservative fallback.
-    if (typeof adapter.queryProducts === 'function') {
-      item.status = 'collecting';
-      run.message = `Finding verified results for “${item.query}”`;
-      await saveRun();
-      render();
-      const queried = await adapter.queryProducts(item.query, {
-        onProgress: (message) => { run.message = boundedText(message, MAX_REASON_LENGTH); render(); }
-      });
-      if (queried?.status === 'complete') {
-        const chosen = chooseCheapestProduct(queried.products, run.mode, item.query);
-        if (chosen) {
-          item.status = 'planned'; item.candidate = normalizedCandidate(chosen);
-          item.selectedBy = chosen.selectedBy; item.reason = null;
-        } else { item.status = 'missed'; item.reason = 'No in-stock, verified product was returned.'; }
-        run.currentIndex += 1;
-        run.message = null;
-        await saveRun(); render();
-        return advancePlanning();
-      }
-    }
-    if (!adapter.isSearchFor(item.query)) {
-      item.status = 'pending';
-      run.message = `Opening ${adapter.retailerName || 'the retailer'} search for “${item.query}”`;
-      const target = adapter.searchUrl(item.query);
-      if (!target) return pause(
-        adapter.searchUnavailableReason || `Open a ${adapter.retailerName || 'retailer'} results page, then continue.`,
-        'planning'
-      );
-      await saveRun();
-      render();
-      adapter.navigate(target);
-      return;
-    }
+    // Product discovery is API-only. If a retailer cannot answer this query,
+    // retain the current item and current document so a later retry is safe.
     item.status = 'collecting';
-    run.message = `Loading all first-page results for “${item.query}”`;
+    run.message = `Finding “${item.query}”`;
     await saveRun();
     render();
-    const collection = await adapter.collectProducts({
+    const queried = await adapter.queryProducts(item.query, {
       onProgress: (message) => {
         run.message = boundedText(message, MAX_REASON_LENGTH);
         render();
       }
     });
-    if (collection?.status === 'human-required') {
+    if (queried?.status === 'human-required') {
       item.status = 'pending';
-      return pause(collection.reason, 'planning');
+      return pause(queried.reason, 'planning');
     }
-    if (collection?.status !== 'complete' && collection?.status !== undefined) {
+    if (queried?.status !== 'complete' || !Array.isArray(queried.products)) {
       item.status = 'pending';
-      return pause(collection.reason || 'Could not confirm that every first-page result was loaded.', 'planning');
+      return pause(
+        queried?.reason || adapter.searchUnavailableReason
+          || `${adapter.retailerName || 'Retailer'} search API is unavailable.`,
+        'planning'
+      );
     }
-    const chosen = chooseCheapestProduct(collection?.products ?? collection, run.mode, item.query);
+    const chosen = chooseCheapestProduct(queried.products, run.mode, item.query);
     if (chosen) {
       item.status = 'planned';
       item.candidate = normalizedCandidate(chosen);
@@ -494,7 +462,7 @@ export function createShoppingListRunner({ retailerId, adapter }) {
       item.reason = null;
     } else {
       item.status = 'missed';
-      item.reason = 'No in-stock, verified product with an Add control was found in the loaded results.';
+      item.reason = 'No in-stock, verified product was returned.';
     }
     run.currentIndex += 1;
     run.message = null;
@@ -508,7 +476,7 @@ export function createShoppingListRunner({ retailerId, adapter }) {
     if (!item) {
       run.phase = 'reviewing';
       run.currentIndex = 0;
-      run.message = 'Opening the cart for a final item-by-item review';
+      run.message = 'Reviewing cart';
       await saveRun();
       render();
       return advanceReview();
@@ -520,9 +488,8 @@ export function createShoppingListRunner({ retailerId, adapter }) {
     }
     const blocked = adapter.blockingReason?.();
     if (blocked) return pause(blocked, 'adding');
-    // Prefer a retailer's private verified API capability. This keeps a fully
-    // capable run on the current document: no product-grid navigation, lazy
-    // images, or scrolling are necessary for the approved Add phase.
+    // Cart mutation is API-only. A null result means the retailer plugin could
+    // not verify the current cart/session, so remain in place and allow retry.
     item.status = 'adding';
     run.message = `Adding ${item.candidate.name}`;
     await saveRun();
@@ -546,61 +513,33 @@ export function createShoppingListRunner({ retailerId, adapter }) {
       render();
       return advanceAdding();
     }
-    if (!adapter.isSearchFor(item.query)) {
-      item.status = 'planned';
-      run.message = `Returning to “${item.query}” to add the exact previewed product`;
-      const target = adapter.searchUrl(item.query);
-      if (!target) return pause(
-        adapter.searchUnavailableReason || `Open a ${adapter.retailerName || 'retailer'} results page, then continue.`,
-        'adding'
-      );
+    if (direct && direct.status !== 'unavailable') {
+      item.status = 'missed';
+      item.reason = boundedText(direct.reason, MAX_REASON_LENGTH) || 'The cart API did not confirm this item.';
+      run.currentIndex += 1;
+      run.message = null;
       await saveRun();
       render();
-      adapter.navigate(target);
-      return;
+      return advanceAdding();
     }
-    const result = await adapter.addProduct(item.candidate, {
-      onProgress: (message) => { run.message = boundedText(message, MAX_REASON_LENGTH); render(); }
-    });
-    if (result?.status === 'human-required') {
-      item.status = 'planned';
-      return pause(result.reason, 'adding');
-    }
-    if (result?.status === 'added') {
-      item.status = 'added';
-      item.priceChanged = result.priceChanged === true;
-      item.reason = result.alreadyPresent === true
-        ? 'This exact product was already represented in the cart, so it was not added twice.'
-        : item.priceChanged ? 'Price changed after preview; the current product was added.' : null;
-    } else {
-      item.status = 'missed';
-      item.reason = boundedText(result?.reason, MAX_REASON_LENGTH) || 'The Add action could not be verified.';
-    }
-    run.currentIndex += 1;
-    run.message = null;
-    await saveRun();
-    render();
-    return advanceAdding();
+    item.status = 'planned';
+    return pause(
+      direct?.reason || adapter.cartUnavailableReason
+        || `${adapter.retailerName || 'Retailer'} cart API is unavailable.`,
+      'adding'
+    );
   }
 
   async function advanceReview() {
     const added = run.items.filter((item) => item.status === 'added' && item.candidate);
-    // Direct review uses the same captured cart context as direct Add and is
-    // intentionally attempted before a cart-page navigation.
+    // Review is API-only. Do not open the cart page merely to scrape it.
     const directReview = await adapter.directReviewCart?.(added.map((item) => item.candidate));
     if (directReview) return finishReview(directReview, added);
-    if (!adapter.isCartPage()) {
-      const target = adapter.cartUrl();
-      if (!target) return pause(
-        adapter.cartUnavailableReason || `Open the ${adapter.retailerName || 'retailer'} cart, then continue.`,
-        'reviewing'
-      );
-      await saveRun();
-      adapter.navigate(target);
-      return;
-    }
-    const review = await adapter.reviewCart(added.map((item) => item.candidate));
-    return finishReview(review, added);
+    return pause(
+      adapter.cartUnavailableReason
+        || `${adapter.retailerName || 'Retailer'} cart review API is unavailable.`,
+      'reviewing'
+    );
   }
 
   async function finishReview(review, added) {

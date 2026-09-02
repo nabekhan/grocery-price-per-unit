@@ -16,10 +16,10 @@ const plugin = defineRetailerPlugin({
   isSearchPage: isWalmartSearchPage,
   getScope: () => getWalmartScope(),
   installCapture: (global) => installWalmartCapture(global),
-  installRuntime: (_global, context) => {
+  installRuntime: (_global, context, capture) => {
     const annotatorInstalled = installWalmartAnnotator(context);
     const sorterInstalled = installWalmartSorter(context);
-    const shoppingInstalled = installWalmartShoppingList();
+    const shoppingInstalled = installWalmartShoppingList(capture);
     return annotatorInstalled !== false || sorterInstalled !== false || shoppingInstalled !== false;
   }
 });

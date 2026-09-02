@@ -65,7 +65,7 @@ export function createTrustedProductSnapshot({ maximum = 500 } = {}) {
       next.push(Object.freeze({
         matched: value?.matched === true,
         // API snapshots prove product availability, not the presence of a
-        // rendered Add button. The add phase still checks that control.
+        // rendered Add button. Cart Builder uses its separate retailer API.
         addable: value?.addable !== false,
         productId,
         name,

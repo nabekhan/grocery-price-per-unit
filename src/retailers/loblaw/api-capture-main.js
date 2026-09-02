@@ -736,33 +736,34 @@ export function installLoblawCapture(global = window) {
     return null;
   }
 
-  function pickupCookieProof() {
-    // The storefront sets this non-sensitive mode flag with the selected
-    // pickup context. Do not retain or transmit cookie values; this is only a
-    // bounded local proof that a cart request observed for the current store
-    // is not a delivery cart.
-    try {
-      const pair = String(global.document?.cookie || '').split(';').map((part) => part.trim())
-        .find((part) => part.startsWith('fulfillment_pickup_type='));
-      if (!pair) return false;
-      const value = decodeURIComponent(pair.slice('fulfillment_pickup_type='.length)).toLowerCase();
-      // PC Express currently uses `store` for an in-store pickup cart. Keep
-      // the allow-list explicit so a delivery mode can never enable replay.
-      return /^(?:pickup|store|true|1)$/.test(value);
-    } catch { return false; }
-  }
-
-  function pickupContextFrom(payload, storeId) {
+  function cartContextMatches(payload, storeId) {
+    // An empty PC Express cart has no entry-level fulfillmentMethod/sellerId,
+    // which made Superstore impossible to bootstrap before the first Add. A
+    // successful exact-cart GET is still usable when it has a recognized cart
+    // shape and the store came from the current URL/cookie. If the payload does
+    // expose store identities, at least one must match; a mismatch always
+    // fails closed.
+    const roots = [payload, payload?.cart, payload?.data]
+      .filter((value) => value && typeof value === 'object' && !Array.isArray(value));
+    const shaped = roots.some((root) => Array.isArray(root.orders)
+      || (root.entries && typeof root.entries === 'object' && !Array.isArray(root.entries)));
+    if (!shaped) return false;
     const seen = new Set();
+    const storeIds = new Set();
     const walk = (value, depth = 0) => {
-      if (!value || typeof value !== 'object' || depth > 7 || seen.has(value)) return false;
+      if (!value || typeof value !== 'object' || depth > 7 || seen.has(value)) return;
       seen.add(value);
-      if (String(value.fulfillmentMethod || '').toLowerCase() === 'pickup'
-        && String(value.sellerId || '') === storeId) return true;
-      const entries = Object.entries(value).slice(0, 100);
-      return entries.some(([, child]) => walk(child, depth + 1));
+      for (const [key, child] of Object.entries(value).slice(0, 100)) {
+        if (/^(?:sellerId|storeId|fulfillmentStoreId)$/i.test(key)
+          && (typeof child === 'string' || typeof child === 'number') && String(child)) {
+          storeIds.add(String(child));
+        } else if (child && typeof child === 'object') {
+          walk(child, depth + 1);
+        }
+      }
     };
-    return walk(payload);
+    walk(payload);
+    return storeIds.size === 0 || storeIds.has(String(storeId));
   }
 
   async function observeCartResponse(template, response) {
@@ -852,11 +853,11 @@ export function installLoblawCapture(global = window) {
 
   function acceptCartTemplate(template, payload) {
     if (!template || !payload || typeof payload !== 'object') return false;
-    // We retain a template only after a private cart response proves that
-    // this exact cart is configured for pickup at the current store. Loblaw
-    // currently uses XMLHttpRequest for these calls on No Frills and fetch on
-    // some other storefront builds, so both observers feed this one gate.
-    if (!pickupContextFrom(payload, template.storeId) && !pickupCookieProof()) return false;
+    // We retain a template only after a recognized response to the exact cart
+    // request agrees with any store identity it contains. Loblaw currently
+    // uses XMLHttpRequest for these calls on No Frills and fetch on some other
+    // storefront builds, so both observers feed this one gate.
+    if (!cartContextMatches(payload, template.storeId)) return false;
     cartTemplate = template;
     state.cartCapabilityStatus = 'ready';
     return true;
@@ -886,7 +887,7 @@ export function installLoblawCapture(global = window) {
       const contentType = response?.headers?.get?.('content-type') || '';
       if (!response?.ok || !/\bjson\b/i.test(contentType)) return null;
       const payload = await response.json();
-      if (!pickupContextFrom(payload, template.storeId) && !pickupCookieProof()) return null;
+      if (!cartContextMatches(payload, template.storeId)) return null;
       const presentProductIds = productIds.filter((id) => typeof id === 'string' && cartEntry(payload, id));
       return Object.freeze({ inspectable: true, presentProductIds: Object.freeze(presentProductIds) });
     } catch { return null; } finally { if (timeout !== null) global.clearTimeout(timeout); }
@@ -908,8 +909,7 @@ export function installLoblawCapture(global = window) {
       const contentType = response?.headers?.get?.('content-type') || '';
       if (!response?.ok || !/\bjson\b/i.test(contentType)) return null;
       const payload = await response.json();
-      if ((pickupContextFrom(payload, template.storeId) || pickupCookieProof())
-        && cartEntry(payload, productId)) {
+      if (cartContextMatches(payload, template.storeId) && cartEntry(payload, productId)) {
         return Object.freeze({ status: 'added' });
       }
       const verified = await readCart([productId]);

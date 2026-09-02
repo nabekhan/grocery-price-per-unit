@@ -185,11 +185,10 @@ describe('RCSS main-world search capture', () => {
     expect(calls[1].options.headers.get('authorization')).toBe('private-value');
   });
 
-  it('bootstraps a late Safari install from the current page cart and pickup-store identity', async () => {
+  it('bootstraps a late Safari install from a valid empty cart and selected store', async () => {
     window.history.replaceState({}, '', '/en/search?search-bar=milk');
     window.localStorage.setItem('lcl-cart-id-banner', 'cart_fixture');
     document.cookie = 'last_selected_store=fixture-store; path=/';
-    document.cookie = 'fulfillment_pickup_type=store; path=/';
     const calls = [];
     window.fetch = vi.fn(async (url, options = {}) => {
       calls.push({ url: String(url), options });
@@ -209,9 +208,23 @@ describe('RCSS main-world search capture', () => {
     expect(calls[0].options.headers.has('authorization')).toBe(false);
   });
 
-  it('adds and reviews only through an observed pickup cart template, then verifies the exact entry', async () => {
+  it('rejects an exact cart response whose explicit store identity disagrees', async () => {
+    window.history.replaceState({}, '', '/en/search?search-bar=milk');
+    window.localStorage.setItem('lcl-cart-id-banner', 'cart_fixture');
+    document.cookie = 'last_selected_store=fixture-store; path=/';
+    window.fetch = vi.fn(async () => jsonResponse({
+      cart: { storeId: 'different-store', orders: [] }
+    }));
+
+    window.eval(sessionCapabilitySource);
+
+    await vi.waitFor(() => expect(window[Symbol.for('rcss-price-per-unit.api-capture.v1')].cartCapabilityStatus)
+      .toBe('current-cart-unverified'));
+    await expect(window.__gppuLoblawCapability.addProduct('milk_EA')).resolves.toBeNull();
+  });
+
+  it('adds and reviews through a verified exact-cart template, then verifies the exact entry', async () => {
     window.history.replaceState({}, '', '/en/search?search-bar=milk&storeId=fixture-store&cartId=cart_fixture');
-    document.cookie = 'fulfillment_pickup_type=pickup; path=/';
     const cartUrl = 'https://api.pcexpress.ca/pcx-bff/api/v2/carts/cart_fixture';
     const payload = { cart: { orders: [{ entries: [{
       quantity: 1,
