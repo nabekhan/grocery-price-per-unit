@@ -1,0 +1,85 @@
+name: Build and release userscript
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: userscript-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the pushed source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install WebKit test browser
+        run: npx playwright install --with-deps webkit
+
+      - name: Build and verify source, behavior, and release identity
+        run: |
+          npm run check
+          npm run userscript:verify
+
+      - name: Resolve the package release
+        id: release
+        shell: bash
+        run: |
+          version=$(node -p "require('./package.json').version")
+          tag="v${version}"
+          built_artifact="dist/userscript/Grocery Price Per Unit.user.js"
+          artifact="Grocery-Price-Per-Unit.user.js"
+          checksum="Grocery-Price-Per-Unit.user.js.sha256"
+          cp "$built_artifact" "$artifact"
+          digest=$(sha256sum "$artifact" | cut -d ' ' -f 1)
+          printf '%s  %s\n' "$digest" "$artifact" > "$checksum"
+          {
+            echo "version=$version"
+            echo "tag=$tag"
+            echo "artifact=$artifact"
+            echo "checksum=$checksum"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Publish the versioned GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release.outputs.tag }}
+          VERSION: ${{ steps.release.outputs.version }}
+          ARTIFACT: ${{ steps.release.outputs.artifact }}
+          CHECKSUM: ${{ steps.release.outputs.checksum }}
+        shell: bash
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; verified bytes are unchanged."
+            exit 0
+          fi
+
+          existing_tag=$(git rev-parse -q --verify "refs/tags/$TAG^{commit}" 2>/dev/null || true)
+          if [[ -n "$existing_tag" && "$existing_tag" != "$GITHUB_SHA" ]]; then
+            echo "Tag $TAG already points to $existing_tag, not pushed commit $GITHUB_SHA." >&2
+            exit 1
+          fi
+
+          gh release create "$TAG" \
+            "$ARTIFACT#Grocery Price Per Unit userscript" \
+            "$CHECKSUM#SHA-256 checksum" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "Grocery Price Per Unit $VERSION" \
+            --generate-notes
