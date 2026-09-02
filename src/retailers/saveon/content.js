@@ -1,6 +1,6 @@
 import { parseProduct } from '../../parsing/parser.js';
 import { isSortableTotalPrice, sortModels } from '../../sorting/sort.js';
-import { annotate, createControl, injectStyles, updateStatus } from '../../ui/control.js';
+import { annotate, clearAnnotation, createControl, injectStyles, updateStatus } from '../../ui/control.js';
 import { MAX_RENDERED_CARDS } from '../limits.js';
 import { claimRuntimeInstall } from '../../runtime/install.js';
 import { areOnlyOwnedMutations } from '../../runtime/mutations.js';
@@ -257,7 +257,7 @@ function reconcileManagedCards(models = []) {
   for (const [card, productCard] of managedCards) {
     if (current.has(card)) continue;
     restoreOrder(card);
-    productCard.querySelector('[data-lups-annotation]')?.remove();
+    clearAnnotation(productCard);
     managedCards.delete(card);
   }
   for (const model of models) {
@@ -293,7 +293,7 @@ function scan() {
   if (excluded === null) {
     for (const model of grid.models) {
       restoreOrder(model.card);
-      model.productCard.querySelector('[data-lups-annotation]')?.remove();
+      clearAnnotation(model.productCard);
     }
     updateStatus(control, state.restored
       ? { total: grid.models.length, excluded: 0, restored: true }
@@ -306,7 +306,7 @@ function scan() {
   }
   for (const model of grid.models) {
     if (model.dataSource === 'api') annotate(model);
-    else model.productCard.querySelector('[data-lups-annotation]')?.remove();
+    else clearAnnotation(model.productCard);
   }
   if (state.restored) {
     for (const model of grid.models) restoreOrder(model.card);

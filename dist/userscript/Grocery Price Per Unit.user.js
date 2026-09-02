@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name        Grocery Price Per Unit
-// @version     2.0.12
+// @version     2.0.13
 // @description Shows and sorts comparable unit prices on Walmart Canada, Real Canadian Superstore, No Frills, and Save-On-Foods.
 // @match       https://www.realcanadiansuperstore.ca/*
 // @match       https://www.nofrills.ca/*
@@ -885,7 +885,15 @@ if (hostname === 'www.realcanadiansuperstore.ca' || hostname === 'www.nofrills.c
         if (inspectedChildren + grid.children.length > MAX_RENDERED_CARDS) return null;
         inspectedChildren += grid.children.length;
         for (const child of grid.children) {
-          if (child.querySelector('[data-testid="product-title"]')) cards.push(child);
+          const title = child.querySelector('[data-testid="product-title"]');
+          if (title) {
+            cards.push(child);
+            continue;
+          }
+          const image = child.querySelector('[data-testid="product-image"]');
+          const link = child.querySelector('a[href*="/product/"], a[href*="/p/"]');
+          const href = link?.getAttribute("href") || "";
+          if (image && /(?:^|\/)(?:product|p)\/[^/?#]+/i.test(href)) cards.push(child);
         }
       }
       if (cards.length >= 3) return [semanticGrids.find((grid) => grid.children.length) || semanticGrids[0], cards, semanticGrids];
@@ -1020,6 +1028,77 @@ if (hostname === 'www.realcanadiansuperstore.ca' || hostname === 'www.nofrills.c
     const normalized = normalizedUnit(unit);
     const format = UNIT_FORMATS.get(normalized);
     return format ? `$${value.toFixed(2)} ${format.spoken}` : `${value.toFixed(2)} ${normalized}`.trim();
+  }
+
+  // src/ui/annotation-placement.js
+  /*!
+   * Shared product-image placement for unit-price annotations.
+   *
+   * Retailer product cards use different wrapper depths and frequently rename
+   * generated classes. Their semantic image markers are considerably more
+   * stable, so every adapter resolves one of those markers and mounts the badge
+   * inside the actual image surface. The CSS then uses that surface as the
+   * containing block for one consistent bottom-right overlay.
+   */
+  var IMAGE_SELECTORS = [
+    '[data-testid="product-image"]',
+    '[data-testid^="productCardImage_"][data-testid$="-testId"]',
+    'img[data-testid="productTileImage"]',
+    '[data-automation-id="productTileImage"]',
+    'img[data-automation-id="productTileImage"]'
+  ];
+  function findProductImageHost(host) {
+    if (!host?.querySelector) return null;
+    let marker = null;
+    for (const selector of IMAGE_SELECTORS) {
+      marker = host.querySelector(selector);
+      if (marker) break;
+    }
+    if (!marker) return null;
+    const imageHost = marker.matches?.("img") ? marker.parentElement : marker;
+    if (!imageHost || imageHost === host || !host.contains(imageHost)) return null;
+    return imageHost;
+  }
+  function placeAnnotationOnProductImage(host, note) {
+    if (!host || !note) return null;
+    const imageHost = findProductImageHost(host);
+    const previousHost = note.parentElement;
+    if (imageHost) {
+      if (previousHost !== imageHost) imageHost.append(note);
+      if (previousHost !== imageHost) previousHost?.removeAttribute("data-lups-image-host");
+      imageHost.setAttribute("data-lups-image-host", "");
+      note.dataset.lupsPlacement = "image-overlay";
+      return imageHost;
+    }
+    previousHost?.removeAttribute("data-lups-image-host");
+    if (note.parentElement !== host || note !== host.lastElementChild) host.append(note);
+    note.dataset.lupsPlacement = "fallback";
+    return null;
+  }
+  function syncAnnotationAccessibility(host, note) {
+    if (!host || !note) return null;
+    let accessibleNote = host.querySelector("[data-lups-annotation-accessible]");
+    const hiddenWithImage = Boolean(note.closest('[aria-hidden="true"]'));
+    if (!hiddenWithImage) {
+      accessibleNote?.remove();
+      return null;
+    }
+    if (!accessibleNote) {
+      accessibleNote = document.createElement("span");
+      accessibleNote.setAttribute("data-lups-annotation-accessible", "");
+      accessibleNote.setAttribute("role", "note");
+      accessibleNote.className = "lups-visually-hidden";
+      host.append(accessibleNote);
+    }
+    accessibleNote.textContent = note.getAttribute("aria-label") || note.textContent;
+    return accessibleNote;
+  }
+  function clearAnnotation(host) {
+    if (!host?.querySelector) return;
+    const note = host.querySelector("[data-lups-annotation]");
+    note?.parentElement?.removeAttribute("data-lups-image-host");
+    note?.remove();
+    host.querySelector("[data-lups-annotation-accessible]")?.remove();
   }
 
   // src/runtime/mutations.js
@@ -1441,6 +1520,7 @@ if (hostname === 'www.realcanadiansuperstore.ca' || hostname === 'www.nofrills.c
       const isDefault = root.dataset.lupsDefaultMode === select.value;
       defaultCopy.textContent = saved ? "Default saved" : isDefault ? "Current default" : "Use as default";
       defaultButton.setAttribute("aria-label", saved ? `${buttonText.textContent} saved as this store's default` : isDefault ? `${buttonText.textContent} is this store's current default` : `Use ${buttonText.textContent} as this store's default`);
+      defaultButton.dataset.lupsCurrentDefault = String(isDefault);
       defaultButton.dataset.lupsSaved = String(saved);
     }
     select.addEventListener("change", () => choose(select.value, { focusButton: true, emit: true }));
@@ -1585,26 +1665,23 @@ if (hostname === 'www.realcanadiansuperstore.ca' || hostname === 'www.nofrills.c
   function annotate(model) {
     const host = model.annotationHost || model.productCard || model.card;
     let note = host.querySelector("[data-lups-annotation]");
+    if (!Number.isFinite(model.normalizedUnitPrice)) {
+      clearAnnotation(host);
+      return;
+    }
     if (!note) {
       note = document.createElement("div");
       note.setAttribute("data-lups-annotation", "");
       note.className = "lups-annotation";
-      host.append(note);
     }
-    if (Number.isFinite(model.normalizedUnitPrice)) {
-      const explicit = model.source === "explicit-site-unit-price";
-      const origin = explicit ? "Retailer" : "Calculated";
-      note.dataset.source = explicit ? "retailer" : "calculated";
-      note.textContent = `${formatUnitPrice(model.normalizedUnitPrice, model.normalizedUnit)} \xB7 ${origin}`;
-      note.title = explicit ? "Unit price supplied by the retailer API" : "Calculated from retailer API package and price data";
-      const description = `${note.title[0].toLowerCase()}${note.title.slice(1)}`;
-      note.setAttribute("aria-label", `${speakUnitPrice(model.normalizedUnitPrice, model.normalizedUnit)}, ${description}`);
-    } else {
-      note.dataset.source = "unknown";
-      note.textContent = model.source === "ambiguous" ? "Unit price ambiguous" : "Unit price unavailable";
-      note.removeAttribute("title");
-      note.removeAttribute("aria-label");
-    }
+    placeAnnotationOnProductImage(host, note);
+    const explicit = model.source === "explicit-site-unit-price";
+    note.dataset.source = explicit ? "retailer" : "calculated";
+    note.textContent = formatUnitPrice(model.normalizedUnitPrice, model.normalizedUnit);
+    note.title = explicit ? "Unit price supplied by the retailer API" : "Calculated from retailer API package and price data";
+    const description = `${note.title[0].toLowerCase()}${note.title.slice(1)}`;
+    note.setAttribute("aria-label", `${speakUnitPrice(model.normalizedUnitPrice, model.normalizedUnit)}, ${description}`);
+    syncAnnotationAccessibility(host, note);
   }
   var adoptedStyleSheet = null;
   function injectStyles() {
@@ -1648,23 +1725,23 @@ if (hostname === 'www.realcanadiansuperstore.ca' || hostname === 'www.nofrills.c
     #lups-menu [data-lups-value][aria-checked="true"] .lups-option-copy{border-color:#aeb7d8!important;background:#eef0f8!important;color:#303a68!important}
     #lups-menu [data-lups-value][aria-checked="true"] .lups-option-icon{border-color:#27364a!important;background:#27364a!important;color:#fff!important}
     #lups-default{margin-top:7px!important}
-    #lups-default[data-lups-saved="true"] .lups-default-copy,#lups-default[data-lups-saved="true"] .lups-option-icon{border-color:#9ca8c7!important;background:#eef0f8!important;color:#303a68!important}
+    #lups-default[data-lups-current-default="true"] .lups-option-icon{border-color:#d5a72c!important;background:#f4c448!important;color:#5b3b00!important;box-shadow:0 5px 15px #8a5d0029,0 1px 3px #8a5d0024!important}
     #lups-control[data-lups-floating="true"] [data-lups-tick][hidden]{display:none!important}
     #lups-menu [data-lups-tick]{position:absolute!important;right:-3px!important;top:-3px!important;display:grid!important;width:15px!important;height:15px!important;place-items:center!important;border:2px solid #fff!important;border-radius:999px!important;background:#6366a8!important;color:#fff!important;font-size:9px!important;line-height:1!important}
     #lups-control :focus-visible{outline:3px solid #6476b8!important;outline-offset:3px!important}
-    .lups-annotation{box-sizing:border-box!important;display:block!important;width:max-content!important;max-width:100%!important;margin:6px 0!important;padding:4px 8px!important;border:1px solid #cbd5e1!important;border-radius:999px!important;background:#f8fafc!important;color:#334155!important;font:650 12px/1.3 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif!important}
-    .lups-annotation[data-source="calculated"]{border-color:#c7ccef!important;background:#f1f2fb!important;color:#3f477c!important}.lups-annotation[data-source="unknown"]{border-color:#d1d5db!important;background:#f7f7f8!important;color:#5f6672!important}
+    [data-lups-image-host]:has(>[data-lups-annotation][data-lups-placement="image-overlay"]){position:relative!important}
+    .lups-annotation{box-sizing:border-box!important;display:block!important;width:max-content!important;max-width:100%!important;margin:6px 0!important;padding:4px 9px!important;border:1px solid #e2e8f0!important;border-radius:999px!important;background:#fffffff2!important;color:#374151!important;box-shadow:0 2px 8px #0f172a24!important;font:600 12px/1.2 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif!important;text-align:center!important;white-space:nowrap!important}
+    .lups-annotation[data-lups-placement="image-overlay"]{position:absolute!important;z-index:4!important;right:10px!important;bottom:10px!important;margin:0!important}
     @media(max-width:640px){#lups-control[data-lups-floating="true"]{right:max(10px,env(safe-area-inset-right))!important;bottom:calc(max(14px,env(safe-area-inset-bottom)) + var(--lups-obstruction-lift,0px))!important}#lups-menu-button{width:48px!important;min-width:48px!important;height:48px!important;min-height:48px!important}#lups-status-row{max-width:calc(100vw - 20px)!important}#lups-status-row[data-lups-critical="true"]{width:calc(100vw - 20px)!important}#lups-menu-host{position:absolute!important;right:0!important;bottom:calc(100% + 8px)!important}#lups-menu{max-width:calc(100vw - 20px)!important;max-height:min(72dvh,calc(100dvh - var(--lups-obstruction-lift,0px) - 88px),520px)!important}.lups-option-copy,.lups-default-copy{max-width:calc(100vw - 78px)!important}}
     @media(forced-colors:active){
       #lups-control[data-lups-floating="true"]{color:CanvasText!important}
       #lups-menu-button,#lups-flip-direction,#lups-reload,#lups-status-row,.lups-option-copy,.lups-default-copy,.lups-option-icon{border-width:2px!important;border-color:CanvasText!important;background:Canvas!important;color:CanvasText!important;box-shadow:none!important}
       #lups-menu [data-lups-value][aria-checked="true"] .lups-option-copy,#lups-menu [data-lups-value][aria-checked="true"] .lups-option-icon{border-color:Highlight!important;background:Highlight!important;color:HighlightText!important}
       .lups-menu-overflow-cue{background:Canvas!important;color:CanvasText!important}
-      .lups-annotation,.lups-annotation[data-source="calculated"],.lups-annotation[data-source="unknown"]{border-color:CanvasText!important;background:Canvas!important;color:CanvasText!important}
-      .lups-annotation{border-width:2px!important;border-style:solid!important}.lups-annotation[data-source="calculated"]{border-style:dashed!important}.lups-annotation[data-source="unknown"]{border-style:dotted!important}
+      .lups-annotation{border-width:2px!important;border-style:solid!important;border-color:CanvasText!important;background:Canvas!important;color:CanvasText!important;box-shadow:none!important}
       #lups-control :focus-visible{outline:3px solid Highlight!important}
     }
-    @media(prefers-contrast:more){#lups-menu-button,#lups-flip-direction,#lups-reload,#lups-status-row,.lups-option-copy,.lups-default-copy,.lups-option-icon{border-width:2px!important;box-shadow:none!important}.lups-annotation{border-width:2px!important}.lups-annotation[data-source="calculated"]{border-style:dashed!important}.lups-annotation[data-source="unknown"]{border-style:dotted!important}#lups-status{font-weight:650!important}}
+    @media(prefers-contrast:more){#lups-menu-button,#lups-flip-direction,#lups-reload,#lups-status-row,.lups-option-copy,.lups-default-copy,.lups-option-icon{border-width:2px!important;box-shadow:none!important}.lups-annotation{border-width:2px!important}#lups-status{font-weight:650!important}}
     @media(prefers-reduced-motion:reduce){#lups-control[data-lups-floating="true"],#lups-menu-button,#lups-flip-direction,#lups-status-row,.lups-option-copy,.lups-option-icon{transition:none!important}}
     `;
       document.head.append(style);
@@ -1908,7 +1985,7 @@ if (hostname === 'www.realcanadiansuperstore.ca' || hostname === 'www.nofrills.c
     for (const card of managedCards) {
       if (current.has(card)) continue;
       released.push(card);
-      card.querySelector("[data-lups-annotation]")?.remove();
+      clearAnnotation(card);
       delete card.dataset.lupsDataSource;
       managedCards.delete(card);
     }
@@ -1994,7 +2071,7 @@ if (hostname === 'www.realcanadiansuperstore.ca' || hostname === 'www.nofrills.c
     for (const model of models) model.card.dataset.lupsDataSource = model.dataSource;
     for (const model of models) {
       if (model.dataSource === "api") annotate(model);
-      else model.card.querySelector("[data-lups-annotation]")?.remove();
+      else clearAnnotation(model.card);
     }
     if (state.restored) return restore(models, control, excludedCards.size);
     if (apiScope !== scope) {
@@ -2955,6 +3032,77 @@ if (hostname === 'www.walmart.ca') {
     return format ? `$${value.toFixed(2)} ${format.spoken}` : `${value.toFixed(2)} ${normalized}`.trim();
   }
 
+  // src/ui/annotation-placement.js
+  /*!
+   * Shared product-image placement for unit-price annotations.
+   *
+   * Retailer product cards use different wrapper depths and frequently rename
+   * generated classes. Their semantic image markers are considerably more
+   * stable, so every adapter resolves one of those markers and mounts the badge
+   * inside the actual image surface. The CSS then uses that surface as the
+   * containing block for one consistent bottom-right overlay.
+   */
+  var IMAGE_SELECTORS = [
+    '[data-testid="product-image"]',
+    '[data-testid^="productCardImage_"][data-testid$="-testId"]',
+    'img[data-testid="productTileImage"]',
+    '[data-automation-id="productTileImage"]',
+    'img[data-automation-id="productTileImage"]'
+  ];
+  function findProductImageHost(host) {
+    if (!host?.querySelector) return null;
+    let marker = null;
+    for (const selector of IMAGE_SELECTORS) {
+      marker = host.querySelector(selector);
+      if (marker) break;
+    }
+    if (!marker) return null;
+    const imageHost = marker.matches?.("img") ? marker.parentElement : marker;
+    if (!imageHost || imageHost === host || !host.contains(imageHost)) return null;
+    return imageHost;
+  }
+  function placeAnnotationOnProductImage(host, note) {
+    if (!host || !note) return null;
+    const imageHost = findProductImageHost(host);
+    const previousHost = note.parentElement;
+    if (imageHost) {
+      if (previousHost !== imageHost) imageHost.append(note);
+      if (previousHost !== imageHost) previousHost?.removeAttribute("data-lups-image-host");
+      imageHost.setAttribute("data-lups-image-host", "");
+      note.dataset.lupsPlacement = "image-overlay";
+      return imageHost;
+    }
+    previousHost?.removeAttribute("data-lups-image-host");
+    if (note.parentElement !== host || note !== host.lastElementChild) host.append(note);
+    note.dataset.lupsPlacement = "fallback";
+    return null;
+  }
+  function syncAnnotationAccessibility(host, note) {
+    if (!host || !note) return null;
+    let accessibleNote = host.querySelector("[data-lups-annotation-accessible]");
+    const hiddenWithImage = Boolean(note.closest('[aria-hidden="true"]'));
+    if (!hiddenWithImage) {
+      accessibleNote?.remove();
+      return null;
+    }
+    if (!accessibleNote) {
+      accessibleNote = document.createElement("span");
+      accessibleNote.setAttribute("data-lups-annotation-accessible", "");
+      accessibleNote.setAttribute("role", "note");
+      accessibleNote.className = "lups-visually-hidden";
+      host.append(accessibleNote);
+    }
+    accessibleNote.textContent = note.getAttribute("aria-label") || note.textContent;
+    return accessibleNote;
+  }
+  function clearAnnotation(host) {
+    if (!host?.querySelector) return;
+    const note = host.querySelector("[data-lups-annotation]");
+    note?.parentElement?.removeAttribute("data-lups-image-host");
+    note?.remove();
+    host.querySelector("[data-lups-annotation-accessible]")?.remove();
+  }
+
   // src/retailers/limits.js
   /*!
    * Shared work budget. Search APIs are capped at 500 products; extra DOM
@@ -3685,7 +3833,7 @@ if (hostname === 'www.walmart.ca') {
     };
   }
   function clearSortModel(container) {
-    container.querySelector(".price-per-unit-info")?.remove();
+    clearAnnotation(container);
     delete container.dataset.ppuSortValue;
     delete container.dataset.ppuSortDimension;
     delete container.dataset.ppuSortUnit;
@@ -3729,8 +3877,7 @@ if (hostname === 'www.walmart.ca') {
       container.dataset.ppuSortDimension = sortable.dimension;
       container.dataset.ppuSortUnit = sortable.unit;
       infoDiv.dataset.source = usedWalmartPPU ? "retailer" : "calculated";
-      const origin = usedWalmartPPU ? "Retailer" : "Calculated";
-      infoDiv.textContent = `${formatUnitPrice(sortable.value, sortable.unit)} \xB7 ${origin}`;
+      infoDiv.textContent = formatUnitPrice(sortable.value, sortable.unit);
       infoDiv.title = usedWalmartPPU ? "Unit price supplied by the retailer API" : "Calculated from retailer API package and price data";
       const description = `${infoDiv.title[0].toLowerCase()}${infoDiv.title.slice(1)}`;
       infoDiv.setAttribute("aria-label", `${speakUnitPrice(sortable.value, sortable.unit)}, ${description}`);
@@ -3738,12 +3885,8 @@ if (hostname === 'www.walmart.ca') {
       clearSortModel(container);
       return;
     }
-    const priceEl = container.querySelector('[data-automation-id="product-price"]');
-    if (priceEl && priceEl.parentNode) {
-      priceEl.parentNode.insertBefore(infoDiv, priceEl.nextSibling);
-    } else {
-      container.prepend(infoDiv);
-    }
+    placeAnnotationOnProductImage(container, infoDiv);
+    syncAnnotationAccessibility(container, infoDiv);
     return pricePerUnit;
   }
   function normalizePriceForSorting(pricePerUnit, unit) {
@@ -4500,6 +4643,7 @@ if (hostname === 'www.walmart.ca') {
       const isDefault = root.dataset.lupsDefaultMode === select.value;
       defaultCopy.textContent = saved ? "Default saved" : isDefault ? "Current default" : "Use as default";
       defaultButton.setAttribute("aria-label", saved ? `${buttonText.textContent} saved as this store's default` : isDefault ? `${buttonText.textContent} is this store's current default` : `Use ${buttonText.textContent} as this store's default`);
+      defaultButton.dataset.lupsCurrentDefault = String(isDefault);
       defaultButton.dataset.lupsSaved = String(saved);
     }
     select.addEventListener("change", () => choose(select.value, { focusButton: true, emit: true }));
@@ -4683,23 +4827,23 @@ if (hostname === 'www.walmart.ca') {
     #lups-menu [data-lups-value][aria-checked="true"] .lups-option-copy{border-color:#aeb7d8!important;background:#eef0f8!important;color:#303a68!important}
     #lups-menu [data-lups-value][aria-checked="true"] .lups-option-icon{border-color:#27364a!important;background:#27364a!important;color:#fff!important}
     #lups-default{margin-top:7px!important}
-    #lups-default[data-lups-saved="true"] .lups-default-copy,#lups-default[data-lups-saved="true"] .lups-option-icon{border-color:#9ca8c7!important;background:#eef0f8!important;color:#303a68!important}
+    #lups-default[data-lups-current-default="true"] .lups-option-icon{border-color:#d5a72c!important;background:#f4c448!important;color:#5b3b00!important;box-shadow:0 5px 15px #8a5d0029,0 1px 3px #8a5d0024!important}
     #lups-control[data-lups-floating="true"] [data-lups-tick][hidden]{display:none!important}
     #lups-menu [data-lups-tick]{position:absolute!important;right:-3px!important;top:-3px!important;display:grid!important;width:15px!important;height:15px!important;place-items:center!important;border:2px solid #fff!important;border-radius:999px!important;background:#6366a8!important;color:#fff!important;font-size:9px!important;line-height:1!important}
     #lups-control :focus-visible{outline:3px solid #6476b8!important;outline-offset:3px!important}
-    .lups-annotation{box-sizing:border-box!important;display:block!important;width:max-content!important;max-width:100%!important;margin:6px 0!important;padding:4px 8px!important;border:1px solid #cbd5e1!important;border-radius:999px!important;background:#f8fafc!important;color:#334155!important;font:650 12px/1.3 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif!important}
-    .lups-annotation[data-source="calculated"]{border-color:#c7ccef!important;background:#f1f2fb!important;color:#3f477c!important}.lups-annotation[data-source="unknown"]{border-color:#d1d5db!important;background:#f7f7f8!important;color:#5f6672!important}
+    [data-lups-image-host]:has(>[data-lups-annotation][data-lups-placement="image-overlay"]){position:relative!important}
+    .lups-annotation{box-sizing:border-box!important;display:block!important;width:max-content!important;max-width:100%!important;margin:6px 0!important;padding:4px 9px!important;border:1px solid #e2e8f0!important;border-radius:999px!important;background:#fffffff2!important;color:#374151!important;box-shadow:0 2px 8px #0f172a24!important;font:600 12px/1.2 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif!important;text-align:center!important;white-space:nowrap!important}
+    .lups-annotation[data-lups-placement="image-overlay"]{position:absolute!important;z-index:4!important;right:10px!important;bottom:10px!important;margin:0!important}
     @media(max-width:640px){#lups-control[data-lups-floating="true"]{right:max(10px,env(safe-area-inset-right))!important;bottom:calc(max(14px,env(safe-area-inset-bottom)) + var(--lups-obstruction-lift,0px))!important}#lups-menu-button{width:48px!important;min-width:48px!important;height:48px!important;min-height:48px!important}#lups-status-row{max-width:calc(100vw - 20px)!important}#lups-status-row[data-lups-critical="true"]{width:calc(100vw - 20px)!important}#lups-menu-host{position:absolute!important;right:0!important;bottom:calc(100% + 8px)!important}#lups-menu{max-width:calc(100vw - 20px)!important;max-height:min(72dvh,calc(100dvh - var(--lups-obstruction-lift,0px) - 88px),520px)!important}.lups-option-copy,.lups-default-copy{max-width:calc(100vw - 78px)!important}}
     @media(forced-colors:active){
       #lups-control[data-lups-floating="true"]{color:CanvasText!important}
       #lups-menu-button,#lups-flip-direction,#lups-reload,#lups-status-row,.lups-option-copy,.lups-default-copy,.lups-option-icon{border-width:2px!important;border-color:CanvasText!important;background:Canvas!important;color:CanvasText!important;box-shadow:none!important}
       #lups-menu [data-lups-value][aria-checked="true"] .lups-option-copy,#lups-menu [data-lups-value][aria-checked="true"] .lups-option-icon{border-color:Highlight!important;background:Highlight!important;color:HighlightText!important}
       .lups-menu-overflow-cue{background:Canvas!important;color:CanvasText!important}
-      .lups-annotation,.lups-annotation[data-source="calculated"],.lups-annotation[data-source="unknown"]{border-color:CanvasText!important;background:Canvas!important;color:CanvasText!important}
-      .lups-annotation{border-width:2px!important;border-style:solid!important}.lups-annotation[data-source="calculated"]{border-style:dashed!important}.lups-annotation[data-source="unknown"]{border-style:dotted!important}
+      .lups-annotation{border-width:2px!important;border-style:solid!important;border-color:CanvasText!important;background:Canvas!important;color:CanvasText!important;box-shadow:none!important}
       #lups-control :focus-visible{outline:3px solid Highlight!important}
     }
-    @media(prefers-contrast:more){#lups-menu-button,#lups-flip-direction,#lups-reload,#lups-status-row,.lups-option-copy,.lups-default-copy,.lups-option-icon{border-width:2px!important;box-shadow:none!important}.lups-annotation{border-width:2px!important}.lups-annotation[data-source="calculated"]{border-style:dashed!important}.lups-annotation[data-source="unknown"]{border-style:dotted!important}#lups-status{font-weight:650!important}}
+    @media(prefers-contrast:more){#lups-menu-button,#lups-flip-direction,#lups-reload,#lups-status-row,.lups-option-copy,.lups-default-copy,.lups-option-icon{border-width:2px!important;box-shadow:none!important}.lups-annotation{border-width:2px!important}#lups-status{font-weight:650!important}}
     @media(prefers-reduced-motion:reduce){#lups-control[data-lups-floating="true"],#lups-menu-button,#lups-flip-direction,#lups-status-row,.lups-option-copy,.lups-option-icon{transition:none!important}}
     `;
       document.head.append(style);
@@ -5775,6 +5919,77 @@ if (hostname === 'www.saveonfoods.com') {
     return format ? `$${value.toFixed(2)} ${format.spoken}` : `${value.toFixed(2)} ${normalized}`.trim();
   }
 
+  // src/ui/annotation-placement.js
+  /*!
+   * Shared product-image placement for unit-price annotations.
+   *
+   * Retailer product cards use different wrapper depths and frequently rename
+   * generated classes. Their semantic image markers are considerably more
+   * stable, so every adapter resolves one of those markers and mounts the badge
+   * inside the actual image surface. The CSS then uses that surface as the
+   * containing block for one consistent bottom-right overlay.
+   */
+  var IMAGE_SELECTORS = [
+    '[data-testid="product-image"]',
+    '[data-testid^="productCardImage_"][data-testid$="-testId"]',
+    'img[data-testid="productTileImage"]',
+    '[data-automation-id="productTileImage"]',
+    'img[data-automation-id="productTileImage"]'
+  ];
+  function findProductImageHost(host) {
+    if (!host?.querySelector) return null;
+    let marker = null;
+    for (const selector of IMAGE_SELECTORS) {
+      marker = host.querySelector(selector);
+      if (marker) break;
+    }
+    if (!marker) return null;
+    const imageHost = marker.matches?.("img") ? marker.parentElement : marker;
+    if (!imageHost || imageHost === host || !host.contains(imageHost)) return null;
+    return imageHost;
+  }
+  function placeAnnotationOnProductImage(host, note) {
+    if (!host || !note) return null;
+    const imageHost = findProductImageHost(host);
+    const previousHost = note.parentElement;
+    if (imageHost) {
+      if (previousHost !== imageHost) imageHost.append(note);
+      if (previousHost !== imageHost) previousHost?.removeAttribute("data-lups-image-host");
+      imageHost.setAttribute("data-lups-image-host", "");
+      note.dataset.lupsPlacement = "image-overlay";
+      return imageHost;
+    }
+    previousHost?.removeAttribute("data-lups-image-host");
+    if (note.parentElement !== host || note !== host.lastElementChild) host.append(note);
+    note.dataset.lupsPlacement = "fallback";
+    return null;
+  }
+  function syncAnnotationAccessibility(host, note) {
+    if (!host || !note) return null;
+    let accessibleNote = host.querySelector("[data-lups-annotation-accessible]");
+    const hiddenWithImage = Boolean(note.closest('[aria-hidden="true"]'));
+    if (!hiddenWithImage) {
+      accessibleNote?.remove();
+      return null;
+    }
+    if (!accessibleNote) {
+      accessibleNote = document.createElement("span");
+      accessibleNote.setAttribute("data-lups-annotation-accessible", "");
+      accessibleNote.setAttribute("role", "note");
+      accessibleNote.className = "lups-visually-hidden";
+      host.append(accessibleNote);
+    }
+    accessibleNote.textContent = note.getAttribute("aria-label") || note.textContent;
+    return accessibleNote;
+  }
+  function clearAnnotation(host) {
+    if (!host?.querySelector) return;
+    const note = host.querySelector("[data-lups-annotation]");
+    note?.parentElement?.removeAttribute("data-lups-image-host");
+    note?.remove();
+    host.querySelector("[data-lups-annotation-accessible]")?.remove();
+  }
+
   // src/runtime/mutations.js
   /*!
    * Mutation classification is bounded before adapter-specific predicates run.
@@ -6194,6 +6409,7 @@ if (hostname === 'www.saveonfoods.com') {
       const isDefault = root.dataset.lupsDefaultMode === select.value;
       defaultCopy.textContent = saved ? "Default saved" : isDefault ? "Current default" : "Use as default";
       defaultButton.setAttribute("aria-label", saved ? `${buttonText.textContent} saved as this store's default` : isDefault ? `${buttonText.textContent} is this store's current default` : `Use ${buttonText.textContent} as this store's default`);
+      defaultButton.dataset.lupsCurrentDefault = String(isDefault);
       defaultButton.dataset.lupsSaved = String(saved);
     }
     select.addEventListener("change", () => choose(select.value, { focusButton: true, emit: true }));
@@ -6338,26 +6554,23 @@ if (hostname === 'www.saveonfoods.com') {
   function annotate(model) {
     const host = model.annotationHost || model.productCard || model.card;
     let note = host.querySelector("[data-lups-annotation]");
+    if (!Number.isFinite(model.normalizedUnitPrice)) {
+      clearAnnotation(host);
+      return;
+    }
     if (!note) {
       note = document.createElement("div");
       note.setAttribute("data-lups-annotation", "");
       note.className = "lups-annotation";
-      host.append(note);
     }
-    if (Number.isFinite(model.normalizedUnitPrice)) {
-      const explicit = model.source === "explicit-site-unit-price";
-      const origin = explicit ? "Retailer" : "Calculated";
-      note.dataset.source = explicit ? "retailer" : "calculated";
-      note.textContent = `${formatUnitPrice(model.normalizedUnitPrice, model.normalizedUnit)} \xB7 ${origin}`;
-      note.title = explicit ? "Unit price supplied by the retailer API" : "Calculated from retailer API package and price data";
-      const description = `${note.title[0].toLowerCase()}${note.title.slice(1)}`;
-      note.setAttribute("aria-label", `${speakUnitPrice(model.normalizedUnitPrice, model.normalizedUnit)}, ${description}`);
-    } else {
-      note.dataset.source = "unknown";
-      note.textContent = model.source === "ambiguous" ? "Unit price ambiguous" : "Unit price unavailable";
-      note.removeAttribute("title");
-      note.removeAttribute("aria-label");
-    }
+    placeAnnotationOnProductImage(host, note);
+    const explicit = model.source === "explicit-site-unit-price";
+    note.dataset.source = explicit ? "retailer" : "calculated";
+    note.textContent = formatUnitPrice(model.normalizedUnitPrice, model.normalizedUnit);
+    note.title = explicit ? "Unit price supplied by the retailer API" : "Calculated from retailer API package and price data";
+    const description = `${note.title[0].toLowerCase()}${note.title.slice(1)}`;
+    note.setAttribute("aria-label", `${speakUnitPrice(model.normalizedUnitPrice, model.normalizedUnit)}, ${description}`);
+    syncAnnotationAccessibility(host, note);
   }
   var adoptedStyleSheet = null;
   function injectStyles() {
@@ -6401,23 +6614,23 @@ if (hostname === 'www.saveonfoods.com') {
     #lups-menu [data-lups-value][aria-checked="true"] .lups-option-copy{border-color:#aeb7d8!important;background:#eef0f8!important;color:#303a68!important}
     #lups-menu [data-lups-value][aria-checked="true"] .lups-option-icon{border-color:#27364a!important;background:#27364a!important;color:#fff!important}
     #lups-default{margin-top:7px!important}
-    #lups-default[data-lups-saved="true"] .lups-default-copy,#lups-default[data-lups-saved="true"] .lups-option-icon{border-color:#9ca8c7!important;background:#eef0f8!important;color:#303a68!important}
+    #lups-default[data-lups-current-default="true"] .lups-option-icon{border-color:#d5a72c!important;background:#f4c448!important;color:#5b3b00!important;box-shadow:0 5px 15px #8a5d0029,0 1px 3px #8a5d0024!important}
     #lups-control[data-lups-floating="true"] [data-lups-tick][hidden]{display:none!important}
     #lups-menu [data-lups-tick]{position:absolute!important;right:-3px!important;top:-3px!important;display:grid!important;width:15px!important;height:15px!important;place-items:center!important;border:2px solid #fff!important;border-radius:999px!important;background:#6366a8!important;color:#fff!important;font-size:9px!important;line-height:1!important}
     #lups-control :focus-visible{outline:3px solid #6476b8!important;outline-offset:3px!important}
-    .lups-annotation{box-sizing:border-box!important;display:block!important;width:max-content!important;max-width:100%!important;margin:6px 0!important;padding:4px 8px!important;border:1px solid #cbd5e1!important;border-radius:999px!important;background:#f8fafc!important;color:#334155!important;font:650 12px/1.3 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif!important}
-    .lups-annotation[data-source="calculated"]{border-color:#c7ccef!important;background:#f1f2fb!important;color:#3f477c!important}.lups-annotation[data-source="unknown"]{border-color:#d1d5db!important;background:#f7f7f8!important;color:#5f6672!important}
+    [data-lups-image-host]:has(>[data-lups-annotation][data-lups-placement="image-overlay"]){position:relative!important}
+    .lups-annotation{box-sizing:border-box!important;display:block!important;width:max-content!important;max-width:100%!important;margin:6px 0!important;padding:4px 9px!important;border:1px solid #e2e8f0!important;border-radius:999px!important;background:#fffffff2!important;color:#374151!important;box-shadow:0 2px 8px #0f172a24!important;font:600 12px/1.2 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif!important;text-align:center!important;white-space:nowrap!important}
+    .lups-annotation[data-lups-placement="image-overlay"]{position:absolute!important;z-index:4!important;right:10px!important;bottom:10px!important;margin:0!important}
     @media(max-width:640px){#lups-control[data-lups-floating="true"]{right:max(10px,env(safe-area-inset-right))!important;bottom:calc(max(14px,env(safe-area-inset-bottom)) + var(--lups-obstruction-lift,0px))!important}#lups-menu-button{width:48px!important;min-width:48px!important;height:48px!important;min-height:48px!important}#lups-status-row{max-width:calc(100vw - 20px)!important}#lups-status-row[data-lups-critical="true"]{width:calc(100vw - 20px)!important}#lups-menu-host{position:absolute!important;right:0!important;bottom:calc(100% + 8px)!important}#lups-menu{max-width:calc(100vw - 20px)!important;max-height:min(72dvh,calc(100dvh - var(--lups-obstruction-lift,0px) - 88px),520px)!important}.lups-option-copy,.lups-default-copy{max-width:calc(100vw - 78px)!important}}
     @media(forced-colors:active){
       #lups-control[data-lups-floating="true"]{color:CanvasText!important}
       #lups-menu-button,#lups-flip-direction,#lups-reload,#lups-status-row,.lups-option-copy,.lups-default-copy,.lups-option-icon{border-width:2px!important;border-color:CanvasText!important;background:Canvas!important;color:CanvasText!important;box-shadow:none!important}
       #lups-menu [data-lups-value][aria-checked="true"] .lups-option-copy,#lups-menu [data-lups-value][aria-checked="true"] .lups-option-icon{border-color:Highlight!important;background:Highlight!important;color:HighlightText!important}
       .lups-menu-overflow-cue{background:Canvas!important;color:CanvasText!important}
-      .lups-annotation,.lups-annotation[data-source="calculated"],.lups-annotation[data-source="unknown"]{border-color:CanvasText!important;background:Canvas!important;color:CanvasText!important}
-      .lups-annotation{border-width:2px!important;border-style:solid!important}.lups-annotation[data-source="calculated"]{border-style:dashed!important}.lups-annotation[data-source="unknown"]{border-style:dotted!important}
+      .lups-annotation{border-width:2px!important;border-style:solid!important;border-color:CanvasText!important;background:Canvas!important;color:CanvasText!important;box-shadow:none!important}
       #lups-control :focus-visible{outline:3px solid Highlight!important}
     }
-    @media(prefers-contrast:more){#lups-menu-button,#lups-flip-direction,#lups-reload,#lups-status-row,.lups-option-copy,.lups-default-copy,.lups-option-icon{border-width:2px!important;box-shadow:none!important}.lups-annotation{border-width:2px!important}.lups-annotation[data-source="calculated"]{border-style:dashed!important}.lups-annotation[data-source="unknown"]{border-style:dotted!important}#lups-status{font-weight:650!important}}
+    @media(prefers-contrast:more){#lups-menu-button,#lups-flip-direction,#lups-reload,#lups-status-row,.lups-option-copy,.lups-default-copy,.lups-option-icon{border-width:2px!important;box-shadow:none!important}.lups-annotation{border-width:2px!important}#lups-status{font-weight:650!important}}
     @media(prefers-reduced-motion:reduce){#lups-control[data-lups-floating="true"],#lups-menu-button,#lups-flip-direction,#lups-status-row,.lups-option-copy,.lups-option-icon{transition:none!important}}
     `;
       document.head.append(style);
@@ -6684,7 +6897,7 @@ if (hostname === 'www.saveonfoods.com') {
     for (const [card, productCard] of managedCards) {
       if (current.has(card)) continue;
       restoreOrder(card);
-      productCard.querySelector("[data-lups-annotation]")?.remove();
+      clearAnnotation(productCard);
       managedCards.delete(card);
     }
     for (const model of models) {
@@ -6720,7 +6933,7 @@ if (hostname === 'www.saveonfoods.com') {
     if (excluded === null) {
       for (const model of grid.models) {
         restoreOrder(model.card);
-        model.productCard.querySelector("[data-lups-annotation]")?.remove();
+        clearAnnotation(model.productCard);
       }
       updateStatus(control, state.restored ? { total: grid.models.length, excluded: 0, restored: true } : {
         total: grid.models.length,
@@ -6731,7 +6944,7 @@ if (hostname === 'www.saveonfoods.com') {
     }
     for (const model of grid.models) {
       if (model.dataSource === "api") annotate(model);
-      else model.productCard.querySelector("[data-lups-annotation]")?.remove();
+      else clearAnnotation(model.productCard);
     }
     if (state.restored) {
       for (const model of grid.models) restoreOrder(model.card);

@@ -9,6 +9,11 @@
  */
 
 import { formatUnitPrice, speakUnitPrice } from './format.js';
+import {
+  clearAnnotation,
+  placeAnnotationOnProductImage,
+  syncAnnotationAccessibility
+} from './annotation-placement.js';
 import { areOnlyOwnedMutations } from '../runtime/mutations.js';
 
 const LABELS = { mass: '$/kg', volume: '$/L', count: '$/each', total: 'total price' };
@@ -422,6 +427,9 @@ function createNativeControl(nativeSection, onChange, state, adapter = {}) {
       : isDefault
         ? `${buttonText.textContent} is this store's current default`
         : `Use ${buttonText.textContent} as this store's default`);
+    // Keep the durable "this is the default" state separate from the brief
+    // confirmation copy so the star remains gold whenever this mode matches.
+    defaultButton.dataset.lupsCurrentDefault = String(isDefault);
     defaultButton.dataset.lupsSaved = String(saved);
   }
   select.addEventListener('change', () => choose(select.value, { focusButton: true, emit: true }));
@@ -578,27 +586,31 @@ export function updateStatus(root, { dimension, sortable, incompatible, unknown,
 export function annotate(model) {
   const host = model.annotationHost || model.productCard || model.card;
   let note = host.querySelector('[data-lups-annotation]');
+  // An overlay is useful only when it can communicate a price. Unavailable and
+  // ambiguous products remain represented in the control summary without
+  // covering their image with a long status label.
+  if (!Number.isFinite(model.normalizedUnitPrice)) {
+    clearAnnotation(host);
+    return;
+  }
   if (!note) {
     note = document.createElement('div');
     note.setAttribute('data-lups-annotation', '');
     note.className = 'lups-annotation';
-    host.append(note);
   }
-  if (Number.isFinite(model.normalizedUnitPrice)) {
-    const explicit = model.source === 'explicit-site-unit-price';
-    const origin = explicit ? 'Retailer' : 'Calculated';
-    note.dataset.source = explicit ? 'retailer' : 'calculated';
-    note.textContent = `${formatUnitPrice(model.normalizedUnitPrice, model.normalizedUnit)} · ${origin}`;
-    note.title = explicit ? 'Unit price supplied by the retailer API' : 'Calculated from retailer API package and price data';
-    const description = `${note.title[0].toLowerCase()}${note.title.slice(1)}`;
-    note.setAttribute('aria-label', `${speakUnitPrice(model.normalizedUnitPrice, model.normalizedUnit)}, ${description}`);
-  } else {
-    note.dataset.source = 'unknown';
-    note.textContent = model.source === 'ambiguous' ? 'Unit price ambiguous' : 'Unit price unavailable';
-    note.removeAttribute('title');
-    note.removeAttribute('aria-label');
-  }
+  placeAnnotationOnProductImage(host, note);
+  const explicit = model.source === 'explicit-site-unit-price';
+  note.dataset.source = explicit ? 'retailer' : 'calculated';
+  // Provenance remains available to pointer and assistive-technology users,
+  // but the always-visible badge is intentionally limited to the price.
+  note.textContent = formatUnitPrice(model.normalizedUnitPrice, model.normalizedUnit);
+  note.title = explicit ? 'Unit price supplied by the retailer API' : 'Calculated from retailer API package and price data';
+  const description = `${note.title[0].toLowerCase()}${note.title.slice(1)}`;
+  note.setAttribute('aria-label', `${speakUnitPrice(model.normalizedUnitPrice, model.normalizedUnit)}, ${description}`);
+  syncAnnotationAccessibility(host, note);
 }
+
+export { clearAnnotation };
 
 let adoptedStyleSheet = null;
 
@@ -643,23 +655,23 @@ export function injectStyles() {
     #lups-menu [data-lups-value][aria-checked="true"] .lups-option-copy{border-color:#aeb7d8!important;background:#eef0f8!important;color:#303a68!important}
     #lups-menu [data-lups-value][aria-checked="true"] .lups-option-icon{border-color:#27364a!important;background:#27364a!important;color:#fff!important}
     #lups-default{margin-top:7px!important}
-    #lups-default[data-lups-saved="true"] .lups-default-copy,#lups-default[data-lups-saved="true"] .lups-option-icon{border-color:#9ca8c7!important;background:#eef0f8!important;color:#303a68!important}
+    #lups-default[data-lups-current-default="true"] .lups-option-icon{border-color:#d5a72c!important;background:#f4c448!important;color:#5b3b00!important;box-shadow:0 5px 15px #8a5d0029,0 1px 3px #8a5d0024!important}
     #lups-control[data-lups-floating="true"] [data-lups-tick][hidden]{display:none!important}
     #lups-menu [data-lups-tick]{position:absolute!important;right:-3px!important;top:-3px!important;display:grid!important;width:15px!important;height:15px!important;place-items:center!important;border:2px solid #fff!important;border-radius:999px!important;background:#6366a8!important;color:#fff!important;font-size:9px!important;line-height:1!important}
     #lups-control :focus-visible{outline:3px solid #6476b8!important;outline-offset:3px!important}
-    .lups-annotation{box-sizing:border-box!important;display:block!important;width:max-content!important;max-width:100%!important;margin:6px 0!important;padding:4px 8px!important;border:1px solid #cbd5e1!important;border-radius:999px!important;background:#f8fafc!important;color:#334155!important;font:650 12px/1.3 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif!important}
-    .lups-annotation[data-source="calculated"]{border-color:#c7ccef!important;background:#f1f2fb!important;color:#3f477c!important}.lups-annotation[data-source="unknown"]{border-color:#d1d5db!important;background:#f7f7f8!important;color:#5f6672!important}
+    [data-lups-image-host]:has(>[data-lups-annotation][data-lups-placement="image-overlay"]){position:relative!important}
+    .lups-annotation{box-sizing:border-box!important;display:block!important;width:max-content!important;max-width:100%!important;margin:6px 0!important;padding:4px 9px!important;border:1px solid #e2e8f0!important;border-radius:999px!important;background:#fffffff2!important;color:#374151!important;box-shadow:0 2px 8px #0f172a24!important;font:600 12px/1.2 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif!important;text-align:center!important;white-space:nowrap!important}
+    .lups-annotation[data-lups-placement="image-overlay"]{position:absolute!important;z-index:4!important;right:10px!important;bottom:10px!important;margin:0!important}
     @media(max-width:640px){#lups-control[data-lups-floating="true"]{right:max(10px,env(safe-area-inset-right))!important;bottom:calc(max(14px,env(safe-area-inset-bottom)) + var(--lups-obstruction-lift,0px))!important}#lups-menu-button{width:48px!important;min-width:48px!important;height:48px!important;min-height:48px!important}#lups-status-row{max-width:calc(100vw - 20px)!important}#lups-status-row[data-lups-critical="true"]{width:calc(100vw - 20px)!important}#lups-menu-host{position:absolute!important;right:0!important;bottom:calc(100% + 8px)!important}#lups-menu{max-width:calc(100vw - 20px)!important;max-height:min(72dvh,calc(100dvh - var(--lups-obstruction-lift,0px) - 88px),520px)!important}.lups-option-copy,.lups-default-copy{max-width:calc(100vw - 78px)!important}}
     @media(forced-colors:active){
       #lups-control[data-lups-floating="true"]{color:CanvasText!important}
       #lups-menu-button,#lups-flip-direction,#lups-reload,#lups-status-row,.lups-option-copy,.lups-default-copy,.lups-option-icon{border-width:2px!important;border-color:CanvasText!important;background:Canvas!important;color:CanvasText!important;box-shadow:none!important}
       #lups-menu [data-lups-value][aria-checked="true"] .lups-option-copy,#lups-menu [data-lups-value][aria-checked="true"] .lups-option-icon{border-color:Highlight!important;background:Highlight!important;color:HighlightText!important}
       .lups-menu-overflow-cue{background:Canvas!important;color:CanvasText!important}
-      .lups-annotation,.lups-annotation[data-source="calculated"],.lups-annotation[data-source="unknown"]{border-color:CanvasText!important;background:Canvas!important;color:CanvasText!important}
-      .lups-annotation{border-width:2px!important;border-style:solid!important}.lups-annotation[data-source="calculated"]{border-style:dashed!important}.lups-annotation[data-source="unknown"]{border-style:dotted!important}
+      .lups-annotation{border-width:2px!important;border-style:solid!important;border-color:CanvasText!important;background:Canvas!important;color:CanvasText!important;box-shadow:none!important}
       #lups-control :focus-visible{outline:3px solid Highlight!important}
     }
-    @media(prefers-contrast:more){#lups-menu-button,#lups-flip-direction,#lups-reload,#lups-status-row,.lups-option-copy,.lups-default-copy,.lups-option-icon{border-width:2px!important;box-shadow:none!important}.lups-annotation{border-width:2px!important}.lups-annotation[data-source="calculated"]{border-style:dashed!important}.lups-annotation[data-source="unknown"]{border-style:dotted!important}#lups-status{font-weight:650!important}}
+    @media(prefers-contrast:more){#lups-menu-button,#lups-flip-direction,#lups-reload,#lups-status-row,.lups-option-copy,.lups-default-copy,.lups-option-icon{border-width:2px!important;box-shadow:none!important}.lups-annotation{border-width:2px!important}#lups-status{font-weight:650!important}}
     @media(prefers-reduced-motion:reduce){#lups-control[data-lups-floating="true"],#lups-menu-button,#lups-flip-direction,#lups-status-row,.lups-option-copy,.lups-option-icon{transition:none!important}}
     `;
     document.head.append(style);

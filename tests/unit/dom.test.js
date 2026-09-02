@@ -16,6 +16,27 @@ describe('sanitized current-card variants', () => {
     expect(grid.models.every((model) => model.dataSource === 'missing-api')).toBe(true);
   });
 
+  it('accepts current titleless cards only with an image marker and product URL', () => {
+    document.body.innerHTML = `<main data-testid="listing-page-container">
+      <section data-testid="product-grid-component">
+        <article><div data-testid="product-image"></div><a href="/en/milk/p/milk-one">Milk</a></article>
+        <article><div data-testid="product-image"></div><a href="/en/eggs/p/eggs-one">Eggs</a></article>
+        <article><div data-testid="product-image"></div><a href="/en/flour/p/flour-one">Flour</a></article>
+        <article><div data-testid="product-image"></div><a href="/ordinary-page">Not a product</a></article>
+      </section>
+    </main>`;
+
+    const grid = extractGrid(document, new Map([['milk-one', {
+      id: 'milk-one', name: 'Milk', packageSizing: '1 L, $0.20/100ml',
+      currentPrice: 2, regularPrice: null, displayPrice: '$2.00', weighted: false
+    }]]));
+
+    expect(grid.models).toHaveLength(3);
+    expect(grid.models.map((model) => model.productId)).toEqual(['milk-one', 'eggs-one', 'flour-one']);
+    expect(grid.models[0].dataSource).toBe('api');
+    expect(grid.models[1].dataSource).toBe('missing-api');
+  });
+
   it('prefers an exact product-ID API record over rendered price text', () => {
     const products = new Map([['flour', {
       id: 'flour',

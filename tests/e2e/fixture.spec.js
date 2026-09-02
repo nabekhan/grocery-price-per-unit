@@ -134,7 +134,7 @@ for (const storefront of [
 
     await recognized.locator('span', { hasText: /^ Sponsored $/ }).evaluate((marker) => marker.remove());
     await expect(recognized).toHaveCSS('display', 'grid');
-    await expect(recognized.locator('[data-lups-annotation]')).toHaveText('$3.00/kg · Calculated');
+    await expect(recognized.locator('[data-lups-annotation]')).toHaveText('$3.00/kg');
     await page.locator('h1').click();
     await expect(page.locator('#lups-status-row')).toBeHidden();
     await expect(page.locator('#lups-status')).not.toContainText('sponsored/ad tile hidden');
@@ -155,7 +155,7 @@ for (const storefront of [
       card.querySelector('a').setAttribute('href', `${location.origin}/product/recognized-sponsored?source=organic`);
     });
     await expect(recognized).toHaveCSS('display', 'grid');
-    await expect(recognized.locator('[data-lups-annotation]')).toHaveText('$3.00/kg · Calculated');
+    await expect(recognized.locator('[data-lups-annotation]')).toHaveText('$3.00/kg');
 
     await page.locator('#grid').evaluate((grid) => grid.insertAdjacentHTML('beforeend', `
       <div data-fixture-id="dynamic-sponsored">
@@ -202,7 +202,7 @@ test('sorts, reverses, restores, and incorporates appended products', async ({ p
   await expect(control.locator('#lups-live-status')).toContainText('Sorted by $/kg · Low → high · 3 comparable');
   await expect(control.locator('#lups-status')).toContainText('Loaded range $2.00–$23.99/kg');
   const calculatedAnnotation = page.locator('[data-fixture-id="mass-sale"] [data-lups-annotation]');
-  await expect(calculatedAnnotation).toHaveText('$2.00/kg · Calculated');
+  await expect(calculatedAnnotation).toHaveText('$2.00/kg');
   await expect(calculatedAnnotation).toHaveAttribute('aria-label', '$2.00 per kilogram, calculated from retailer API package and price data');
   await expect(control.locator('#lups-status')).toContainText('3 comparable');
   await expect(page.locator('#lups-restore')).toHaveCount(0);
@@ -366,6 +366,8 @@ test('fits a narrow mobile viewport and remains keyboard accessible', async ({ p
   await expect(page.locator('#lups-default')).toBeFocused();
   await page.keyboard.press('Enter');
   await expect(page.locator('#lups-default')).toContainText('Default saved');
+  await expect(page.locator('#lups-default')).toHaveAttribute('data-lups-current-default', 'true');
+  await expect(page.locator('#lups-default .lups-option-icon')).toHaveCSS('background-color', 'rgb(244, 196, 72)');
   await expect.poll(() => page.evaluate(() => localStorage.getItem(
     '__gppu_userscript_storage__:sync:defaultSortMode'
   ))).toBe('"auto-asc"');
@@ -373,6 +375,8 @@ test('fits a narrow mobile viewport and remains keyboard accessible', async ({ p
   await expect(trigger).toBeFocused();
   await choose(page, 'restore');
   await expect(page.locator('#lups-mode')).toHaveValue('restore');
+  await page.locator('#lups-menu-button').click();
+  await expect(page.locator('#lups-default')).toHaveAttribute('data-lups-current-default', 'false');
   await expect(page.locator('#lups-restore')).toHaveCount(0);
   const box = await page.locator('#lups-control').boundingBox();
   expect(box.x).toBeGreaterThanOrEqual(0);
@@ -654,7 +658,7 @@ test('uses the same API-first flow on No Frills', async ({ page }) => {
   await expect(page.locator('#lups-control')).toHaveAttribute('data-lups-floating', 'true');
   await expect(page.locator('[data-fixture-id="volume-explicit"]')).toHaveAttribute('data-lups-data-source', 'api');
   const retailerAnnotation = page.locator('[data-fixture-id="volume-explicit"] [data-lups-annotation]');
-  await expect(retailerAnnotation).toHaveText('$1.60/L · Retailer');
+  await expect(retailerAnnotation).toHaveText('$1.60/L');
   await expect(retailerAnnotation).toHaveAttribute('aria-label', '$1.60 per litre, unit price supplied by the retailer API');
 });
 
@@ -673,7 +677,7 @@ test('clears same-query prices across a store transition until the new store sna
   await install(page, INITIAL_TILES, 'milk');
   await choose(page, 'auto-asc');
   const annotation = page.locator('[data-fixture-id="volume-explicit"] [data-lups-annotation]');
-  await expect(annotation).toHaveText('$1.60/L · Retailer');
+  await expect(annotation).toHaveText('$1.60/L');
   await page.locator('#grid').evaluate((grid) => grid.insertAdjacentHTML('beforeend', `
     <div data-fixture-id="pending-sponsored"><h3 data-testid="product-title">Pending sponsored</h3>
     <span>Sponsored</span><a href="/product/pending-sponsored?source=sptd">Sponsored result</a></div>`));
@@ -712,7 +716,7 @@ test('clears same-query prices across a store transition until the new store sna
     method: 'POST',
     body: JSON.stringify({ listingInfo: { filters: { 'search-bar': ['milk'] } } })
   }));
-  await expect(annotation).toHaveText('$1.80/L · Retailer');
+  await expect(annotation).toHaveText('$1.80/L');
   await expect(page.locator('[data-fixture-id="volume-explicit"]')).toHaveAttribute('data-lups-data-source', 'api');
   await expect(page.locator('#lups-status')).not.toContainText('Website order preserved');
 });
@@ -720,7 +724,7 @@ test('clears same-query prices across a store transition until the new store sna
 test('Loblaw annotates a cached lazy card during continuous retailer DOM churn', async ({ page }) => {
   await openFixture(page, '?search-bar=milk');
   await install(page, INITIAL_TILES, 'milk');
-  await expect(page.locator('[data-fixture-id="volume-explicit"] [data-lups-annotation]')).toHaveText('$1.60/L · Retailer');
+  await expect(page.locator('[data-fixture-id="volume-explicit"] [data-lups-annotation]')).toHaveText('$1.60/L');
   await page.waitForTimeout(250);
   await page.evaluate(() => {
     document.querySelector('[data-fixture-id="volume-explicit"]').remove();
@@ -740,7 +744,7 @@ test('Loblaw annotates a cached lazy card during continuous retailer DOM churn',
     }, 2_000);
   });
   await expect(page.locator('[data-fixture-id="volume-lazy"] [data-lups-annotation]'))
-    .toHaveText('$1.60/L · Retailer', { timeout: 1_200 });
+    .toHaveText('$1.60/L', { timeout: 1_200 });
   expect(await page.evaluate(() => window.__loblawChurnStopped)).toBe(false);
   await page.evaluate(() => {
     clearInterval(window.__loblawChurnInterval);
@@ -793,7 +797,7 @@ test('Loblaw bounds bridge arrays before reads and preserves the newer reentrant
   await openFixture(page, '?search-bar=milk');
   await install(page, INITIAL_TILES, 'milk');
   const annotation = page.locator('[data-fixture-id="volume-explicit"] [data-lups-annotation]');
-  await expect(annotation).toHaveText('$1.60/L · Retailer');
+  await expect(annotation).toHaveText('$1.60/L');
   await choose(page, 'auto-asc');
 
   const oversizedReads = await page.evaluate(() => {
@@ -817,7 +821,7 @@ test('Loblaw bounds bridge arrays before reads and preserves the newer reentrant
     return reads;
   });
   expect(oversizedReads).toBe(0);
-  await expect(annotation).toHaveText('$1.60/L · Retailer');
+  await expect(annotation).toHaveText('$1.60/L');
 
   const alternatingReads = await page.evaluate(() => {
     let lengthReads = 0;
@@ -846,7 +850,7 @@ test('Loblaw bounds bridge arrays before reads and preserves the newer reentrant
     return { lengthReads, indexReads };
   });
   expect(alternatingReads).toEqual({ lengthReads: 1, indexReads: 1 });
-  await expect(annotation).toHaveText('$1.60/L · Calculated');
+  await expect(annotation).toHaveText('$1.60/L');
 
   await page.evaluate(() => window.postMessage({
     source: 'rcss-price-per-unit', version: 2, type: 'api-products', mode: 'snapshot', revision: 3,
@@ -857,7 +861,7 @@ test('Loblaw bounds bridge arrays before reads and preserves the newer reentrant
     ]
   }, location.origin));
   await page.waitForTimeout(0);
-  await expect(annotation).toHaveText('$1.60/L · Calculated');
+  await expect(annotation).toHaveText('$1.60/L');
 
   await page.evaluate(() => {
     const outerProducts = [];

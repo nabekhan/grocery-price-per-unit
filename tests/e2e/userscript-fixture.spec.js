@@ -70,7 +70,17 @@ test('single page-world userscript captures and sorts without GM privileges', as
 
   await expect(page.locator('#lups-control')).toHaveCount(1);
   await expect(page.locator('[data-fixture-id="volume-explicit"]')).toHaveAttribute('data-lups-data-source', 'api');
-  await expect(page.locator('[data-fixture-id="volume-explicit"] [data-lups-annotation]')).toHaveText('$1.60/L · Retailer');
+  await expect(page.locator('[data-fixture-id="volume-explicit"] [data-lups-annotation]')).toHaveText('$1.60/L');
+  expect(await page.locator('[data-fixture-id="volume-explicit"]').evaluate((card) => {
+    const image = card.querySelector('[data-testid="product-image"]');
+    const note = card.querySelector('[data-lups-annotation]');
+    const imageBox = image.getBoundingClientRect();
+    const noteBox = note.getBoundingClientRect();
+    return note.parentElement === image
+      && note.dataset.lupsPlacement === 'image-overlay'
+      && Math.abs(imageBox.right - noteBox.right - 10) <= 1
+      && Math.abs(imageBox.bottom - noteBox.bottom - 10) <= 1;
+  })).toBe(true);
 
   await choose(page, 'auto-asc');
   await expect(page.locator('#lups-status')).toContainText('3 comparable');
@@ -167,6 +177,12 @@ test('captures the visual state matrix from the built userscript artifact', asyn
     exitFilteredRestore: () => page.locator('[data-fixture-id="visual-sponsored"]').evaluate((card) => card.remove())
   });
   expectControlStateMatrix(evidence);
+  const accessiblePrice = page.getByRole('note').filter({ hasText: '$1.60 per litre' });
+  await expect(accessiblePrice).toHaveCount(1);
+  expect(await accessiblePrice.evaluate((note) => note.closest('[aria-hidden="true"]'))).toBeNull();
+  expect(await page.locator('[data-fixture-id="volume-explicit"] [data-lups-annotation]').evaluate(
+    (note) => note.closest('[aria-hidden="true"]')?.getAttribute('data-testid')
+  )).toBe('product-image');
   await captureForcedColorsControl(page, {
     outputDirectory: path.join(root, 'artifacts/screenshots/userscript-control-state-matrix'),
     setup: () => page.goto('https://www.realcanadiansuperstore.ca/visual-userscript-fixture?search-bar=milk')
@@ -216,7 +232,7 @@ test('No Frills userscript captures its shared Loblaw API model from document-st
   await page.goto('https://www.nofrills.ca/document-start-fixture?search-bar=milk');
   await expect(page.locator('#lups-control')).toHaveCount(1);
   await expect(page.locator('[data-fixture-id="volume-explicit"]')).toHaveAttribute('data-lups-data-source', 'api');
-  await expect(page.locator('[data-fixture-id="volume-explicit"] [data-lups-annotation]')).toHaveText('$1.60/L · Retailer');
+  await expect(page.locator('[data-fixture-id="volume-explicit"] [data-lups-annotation]')).toHaveText('$1.60/L');
   await page.locator('#lups-menu-button').click();
   await page.locator('[data-lups-value="auto-asc"]').click();
   await expect(page.locator('#lups-status')).toContainText('3 comparable');
@@ -385,10 +401,10 @@ test('Walmart userscript starts at document-start and carries captured API data 
   await page.route('https://www.walmart.ca/document-start-fixture*', (route) => route.fulfill({
     contentType: 'text/html',
     body: `<!doctype html><html><head><style>
-      #grid{display:flex}.wrapper,.card{width:140px;height:90px}
+      #grid{display:flex}.wrapper,.card{width:140px;min-height:90px}.media{height:20px}.media img{width:20px;height:20px}
     </style></head><body><div id="grid">
-      <div class="wrapper"><div class="card" data-item-id="mass-two"><span data-automation-id="product-price">$4.00</span></div></div>
-      <div class="wrapper"><div class="card" data-item-id="mass-one"><span data-automation-id="product-price">$1.00</span></div></div>
+      <div class="wrapper"><div class="card" data-item-id="mass-two"><div class="image-controls"><div class="media"><div><img data-testid="productTileImage" alt="Rice"></div></div><div><button>Add Rice</button></div></div><div class="details"><span data-automation-id="product-price">$4.00</span></div></div></div>
+      <div class="wrapper"><div class="card" data-item-id="mass-one"><div class="image-controls"><div class="media"><div><img data-testid="productTileImage" alt="Flour"></div></div><div><button>Add Flour</button></div></div><div class="details"><span data-automation-id="product-price">$1.00</span></div></div></div>
     </div><script>
       fetch('/orchestra/snb/graphql/search?variables=' + encodeURIComponent(JSON.stringify({query:'flour',page:1})));
     </script></body></html>`
@@ -397,9 +413,19 @@ test('Walmart userscript starts at document-start and carries captured API data 
   await page.goto('https://www.walmart.ca/document-start-fixture?q=flour');
   await expect(page.locator('#lups-control')).toHaveCount(1);
   await expect(page.locator('[data-item-id="mass-one"]')).toHaveAttribute('data-ppu-data-source', 'api');
-  await expect(page.locator('[data-item-id="mass-one"] .price-per-unit-info')).toHaveText('$1.00/kg · Calculated');
+  await expect(page.locator('[data-item-id="mass-one"] .price-per-unit-info')).toHaveText('$1.00/kg');
   await expect(page.locator('[data-item-id="mass-one"] .price-per-unit-info')).toHaveAttribute('aria-label', '$1.00 per kilogram, calculated from retailer API package and price data');
-  await expect(page.locator('[data-item-id="mass-two"] .price-per-unit-info')).toHaveText('$5.00/kg · Retailer');
+  expect(await page.locator('[data-item-id="mass-one"]').evaluate((card) => {
+    const imageHost = card.querySelector('img[data-testid="productTileImage"]').parentElement;
+    const note = card.querySelector('[data-lups-annotation]');
+    const imageBox = imageHost.getBoundingClientRect();
+    const noteBox = note.getBoundingClientRect();
+    return note.parentElement === imageHost
+      && note.dataset.lupsPlacement === 'image-overlay'
+      && Math.abs(imageBox.right - noteBox.right - 10) <= 1
+      && Math.abs(imageBox.bottom - noteBox.bottom - 10) <= 1;
+  })).toBe(true);
+  await expect(page.locator('[data-item-id="mass-two"] .price-per-unit-info')).toHaveText('$5.00/kg');
   await expect(page.locator('[data-item-id="mass-two"] .price-per-unit-info')).toHaveAttribute('aria-label', '$5.00 per kilogram, unit price supplied by the retailer API');
   await page.locator('#lups-menu-button').click();
   await page.locator('[data-lups-value="mass-asc"]').click();
@@ -514,13 +540,13 @@ test('Walmart never ranks zero API prices and removes stale zero-derived annotat
   }));
 
   await page.goto('https://www.walmart.ca/zero-price-fixture?q=rice');
-  await expect(page.locator('[data-item-id="zero-calculated"] [data-lups-annotation]')).toHaveText('$4.00/kg · Calculated');
-  await expect(page.locator('[data-item-id="zero-explicit"] [data-lups-annotation]')).toHaveText('$5.00/kg · Retailer');
+  await expect(page.locator('[data-item-id="zero-calculated"] [data-lups-annotation]')).toHaveText('$4.00/kg');
+  await expect(page.locator('[data-item-id="zero-explicit"] [data-lups-annotation]')).toHaveText('$5.00/kg');
 
   await page.evaluate(() => fetch('/orchestra/snb/graphql/search?variables=' + encodeURIComponent(JSON.stringify({ query: 'rice', page: 1 }))));
   await expect(page.locator('[data-item-id="zero-calculated"] [data-lups-annotation]')).toHaveCount(0);
   await expect(page.locator('[data-item-id="zero-calculated"]')).not.toHaveAttribute('data-ppu-sort-value', /.+/);
-  await expect(page.locator('[data-item-id="zero-explicit"] [data-lups-annotation]')).toHaveText('$5.00/kg · Calculated');
+  await expect(page.locator('[data-item-id="zero-explicit"] [data-lups-annotation]')).toHaveText('$5.00/kg');
   await expect(page.locator('[data-item-id="zero-explicit"]')).toHaveAttribute('data-ppu-sort-value', '5');
   expect(pageErrors).toEqual([]);
 });
@@ -550,7 +576,7 @@ test('Walmart clears and rebuilds state when a recycled card loses its product i
 
   await page.goto('https://www.walmart.ca/recycled-identity-fixture?q=rice');
   const recycled = page.locator('[data-name="recycled"] .card');
-  await expect(recycled.locator('.price-per-unit-info')).toHaveText('$6.00/kg · Calculated');
+  await expect(recycled.locator('.price-per-unit-info')).toHaveText('$6.00/kg');
   await choose(page, 'auto-asc');
   await expect.poll(() => page.locator('#grid > .wrapper').evaluateAll((wrappers) => wrappers
     .map((wrapper) => ({ name: wrapper.dataset.name, order: Number(wrapper.style.order) }))
@@ -562,10 +588,10 @@ test('Walmart clears and rebuilds state when a recycled card loses its product i
   await expect(recycled).not.toHaveAttribute('data-ppu-data-source');
   await expect(recycled).not.toHaveAttribute('data-ppu-total-price');
   await expect(recycled).not.toHaveAttribute('data-ppu-sort-value');
-  await expect(page.locator('[data-name="other"] .price-per-unit-info')).toHaveText('$2.00/kg · Calculated');
+  await expect(page.locator('[data-name="other"] .price-per-unit-info')).toHaveText('$2.00/kg');
 
   await recycled.evaluate((card) => card.setAttribute('data-item-id', 'replacement'));
-  await expect(recycled.locator('.price-per-unit-info')).toHaveText('$1.00/kg · Calculated');
+  await expect(recycled.locator('.price-per-unit-info')).toHaveText('$1.00/kg');
   await expect(recycled).toHaveAttribute('data-ppu-data-source', 'api');
   await expect.poll(() => page.locator('#grid > .wrapper').evaluateAll((wrappers) => wrappers
     .map((wrapper) => ({ name: wrapper.dataset.name, order: Number(wrapper.style.order) }))
@@ -624,8 +650,8 @@ test('Walmart reads message schema once and commits batch updates transactionall
     return { lengthReads, indexReads };
   }, context);
   expect(initialReads).toEqual({ lengthReads: 1, indexReads: 2 });
-  await expect(page.locator('[data-item-id="a"] .price-per-unit-info')).toHaveText('$2.00/kg · Calculated');
-  await expect(page.locator('[data-item-id="b"] .price-per-unit-info')).toHaveText('$3.00/kg · Calculated');
+  await expect(page.locator('[data-item-id="a"] .price-per-unit-info')).toHaveText('$2.00/kg');
+  await expect(page.locator('[data-item-id="b"] .price-per-unit-info')).toHaveText('$3.00/kg');
   await expect(page.locator('[data-item-id="c"] .price-per-unit-info')).toHaveCount(0);
   await page.evaluate((context) => window.postMessage({
     source: 'walmart-price-per-unit', version: 2, type: 'api-products', mode: 'snapshot', revision: 2, context,
@@ -635,8 +661,8 @@ test('Walmart reads message schema once and commits batch updates transactionall
     ]
   }, location.origin), context);
   await page.waitForTimeout(0);
-  await expect(page.locator('[data-item-id="a"] .price-per-unit-info')).toHaveText('$2.00/kg · Calculated');
-  await expect(page.locator('[data-item-id="b"] .price-per-unit-info')).toHaveText('$3.00/kg · Calculated');
+  await expect(page.locator('[data-item-id="a"] .price-per-unit-info')).toHaveText('$2.00/kg');
+  await expect(page.locator('[data-item-id="b"] .price-per-unit-info')).toHaveText('$3.00/kg');
   await choose(page, 'auto-asc');
 
   await page.evaluate((context) => {
@@ -669,7 +695,7 @@ test('Walmart reads message schema once and commits batch updates transactionall
   }, context);
   await page.waitForTimeout(250);
   await expect(page.locator('.price-per-unit-info')).toHaveCount(3);
-  await expect(page.locator('[data-item-id="c"] .price-per-unit-info')).toHaveText('$1.00/kg · Calculated');
+  await expect(page.locator('[data-item-id="c"] .price-per-unit-info')).toHaveText('$1.00/kg');
   expect(pageErrors).toEqual([]);
 });
 
@@ -696,12 +722,12 @@ test('Walmart rejects an extreme revision without freezing ordinary updates', as
 
   await send(1, 2);
   const annotation = page.locator('[data-item-id="rice"] .price-per-unit-info');
-  await expect(annotation).toHaveText('$2.00/kg · Calculated');
+  await expect(annotation).toHaveText('$2.00/kg');
   await send(Number.MAX_SAFE_INTEGER, 999);
   await page.waitForTimeout(250);
-  await expect(annotation).toHaveText('$2.00/kg · Calculated');
+  await expect(annotation).toHaveText('$2.00/kg');
   await send(2, 3);
-  await expect(annotation).toHaveText('$3.00/kg · Calculated');
+  await expect(annotation).toHaveText('$3.00/kg');
   expect(pageErrors).toEqual([]);
 });
 
@@ -864,14 +890,14 @@ test('Walmart userscript avoids redundant scans after one API update', async ({ 
   await page.waitForTimeout(350);
   await page.evaluate(() => { window.__gppuMeasurements.updates = 0; window.__gppuMeasurements.cardQueries = 0; });
   await page.evaluate(() => fetch('/orchestra/snb/graphql/search?variables=' + encodeURIComponent(JSON.stringify({ query: 'flour', page: 1 }))));
-  await expect(page.locator('[data-item-id="mass-one"] .price-per-unit-info')).toContainText('$1.00/kg · Calculated');
+  await expect(page.locator('[data-item-id="mass-one"] .price-per-unit-info')).toContainText('$1.00/kg');
   await page.waitForTimeout(350);
   expect(await page.evaluate(() => window.__gppuMeasurements)).toEqual({ updates: 1, cardQueries: 2 });
 
   await page.evaluate(() => { window.__gppuMeasurements.updates = 0; window.__gppuMeasurements.cardQueries = 0; });
   await page.locator('#grid').evaluate((grid) => grid.insertAdjacentHTML('beforeend', `
     <div class="wrapper"><div class="card" data-item-id="mass-new"><span data-automation-id="product-price">$3.00</span></div></div>`));
-  await expect(page.locator('[data-item-id="mass-new"] .price-per-unit-info')).toContainText('$3.00/kg · Calculated');
+  await expect(page.locator('[data-item-id="mass-new"] .price-per-unit-info')).toContainText('$3.00/kg');
   await page.waitForTimeout(350);
   expect(await page.evaluate(() => window.__gppuMeasurements)).toEqual({ updates: 1, cardQueries: 2 });
 
@@ -942,8 +968,8 @@ test('Walmart userscript ignores an older response after results navigation', as
       <div class="wrapper" data-name="stale-eggs"><div class="card" data-item-id="stale-eggs"><span data-automation-id="product-price">$1.00</span></div></div>`;
     await fetch('/orchestra/snb/graphql/search?variables=' + encodeURIComponent(JSON.stringify({query:'milk',page:1})));
   });
-  await expect(page.locator('[data-name="milk-low"] .price-per-unit-info')).toContainText('$1.00/L · Calculated');
-  await expect(page.locator('[data-name="milk-high"] .price-per-unit-info')).toContainText('$3.00/L · Calculated');
+  await expect(page.locator('[data-name="milk-low"] .price-per-unit-info')).toContainText('$1.00/L');
+  await expect(page.locator('[data-name="milk-high"] .price-per-unit-info')).toContainText('$3.00/L');
   releaseEggs();
   await page.evaluate(() => window.staleSearch);
   await expect(page.locator('[data-name="stale-eggs"] .price-per-unit-info')).toHaveCount(0);
@@ -1003,7 +1029,7 @@ test('Walmart clears only authoritative empty base pages and recovers safely', a
   await expect(page.locator('[data-ppu-data-source="api"]')).toHaveCount(0);
 
   await request({ query: 'milk', page: 1, mode: 'recovered' });
-  await expect(page.locator('[data-item-id="fresh-milk"] .price-per-unit-info')).toHaveText('$3.00/L · Calculated');
+  await expect(page.locator('[data-item-id="fresh-milk"] .price-per-unit-info')).toHaveText('$3.00/L');
 });
 
 test('Walmart rejects pagination requested before a refreshed same-query base page', async ({ page }) => {
@@ -1075,7 +1101,7 @@ test('Walmart clears same-query prices when the page/store context changes', asy
   await page.goto('https://www.walmart.ca/store-scope-fixture?q=milk&store=alpha');
   const annotation = page.locator('[data-item-id="scoped-milk"] .price-per-unit-info');
   await page.evaluate(() => fetch('/orchestra/snb/graphql/search?variables=' + encodeURIComponent(JSON.stringify({ query: 'milk', page: 1, store: 'alpha' }))));
-  await expect(annotation).toHaveText('$4.00/L · Calculated');
+  await expect(annotation).toHaveText('$4.00/L');
   await choose(page, 'auto-asc');
   await expect(page.locator('#lups-control')).toHaveAttribute('data-lups-data-state', 'ready');
 
@@ -1091,7 +1117,7 @@ test('Walmart clears same-query prices when the page/store context changes', asy
   await expect(page.locator('[data-item-id="scoped-milk"]')).not.toHaveAttribute('data-ppu-data-source', 'api');
 
   await page.evaluate(() => fetch('/orchestra/snb/graphql/search?variables=' + encodeURIComponent(JSON.stringify({ query: 'milk', page: 1, store: 'beta' }))));
-  await expect(annotation).toHaveText('$5.00/L · Calculated');
+  await expect(annotation).toHaveText('$5.00/L');
   await expect(page.locator('#lups-control')).toHaveAttribute('data-lups-data-state', 'ready');
   await expect(page.locator('#lups-status')).not.toContainText('Website order preserved');
 });
@@ -1114,7 +1140,7 @@ test('Walmart annotates a cached lazy card during continuous retailer DOM churn'
   }));
 
   await page.goto('https://www.walmart.ca/churn-fixture?q=flour');
-  await expect(page.locator('[data-item-id="churn-base"] .price-per-unit-info')).toHaveText('$2.00/kg · Calculated');
+  await expect(page.locator('[data-item-id="churn-base"] .price-per-unit-info')).toHaveText('$2.00/kg');
   await page.evaluate(() => {
     const churn = document.querySelector('#retailer-churn');
     window.__walmartChurnStopped = false;
@@ -1129,7 +1155,7 @@ test('Walmart annotates a cached lazy card during continuous retailer DOM churn'
     }, 2_000);
   });
   await expect(page.locator('[data-item-id="churn-lazy"] .price-per-unit-info'))
-    .toHaveText('$1.00/kg · Calculated', { timeout: 1_200 });
+    .toHaveText('$1.00/kg', { timeout: 1_200 });
   expect(await page.evaluate(() => window.__walmartChurnStopped)).toBe(false);
   await page.evaluate(() => {
     clearInterval(window.__walmartChurnInterval);
@@ -1208,17 +1234,17 @@ test('Save-On userscript merges bootstrap and page-two API products from documen
   }));
 
   await page.goto('https://www.saveonfoods.com/sm/pickup/rsid/6632/results?q=eggs');
-  await expect(page.locator('[data-name="page-one"] [data-lups-annotation]')).toHaveText('$0.50/each · Retailer');
+  await expect(page.locator('[data-name="page-one"] [data-lups-annotation]')).toHaveText('$0.50/each');
   await expect(page.locator('[data-name="page-one"] [data-lups-annotation]')).toHaveAttribute('aria-label', '$0.50 each, unit price supplied by the retailer API');
-  await expect(page.locator('[data-name="page-two"] [data-lups-annotation]')).toContainText('$0.25/each · Retailer');
-  await expect(page.locator('[data-name="mass-one"] [data-lups-annotation]')).toContainText('$2.00/kg · Retailer');
+  await expect(page.locator('[data-name="page-two"] [data-lups-annotation]')).toContainText('$0.25/each');
+  await expect(page.locator('[data-name="mass-one"] [data-lups-annotation]')).toContainText('$2.00/kg');
   await expect(page.locator('[data-name="unrelated"] [data-lups-annotation]')).toHaveCount(0);
   await page.evaluate(() => Promise.all([
     fetch('https://storefrontgateway.saveonfoods.com/api/stores/6632/search?q=eggs&page=90'),
     fetch('https://storefrontgateway.saveonfoods.com/api/stores/6632/search?q=eggs&page=91')
   ]));
-  await expect(page.locator('[data-name="page-one"] [data-lups-annotation]')).toContainText('$0.50/each · Retailer');
-  await expect(page.locator('[data-name="page-two"] [data-lups-annotation]')).toContainText('$0.25/each · Retailer');
+  await expect(page.locator('[data-name="page-one"] [data-lups-annotation]')).toContainText('$0.50/each');
+  await expect(page.locator('[data-name="page-two"] [data-lups-annotation]')).toContainText('$0.25/each');
   await expect(page.locator('[data-name="unrelated"] [data-lups-annotation]')).toHaveCount(0);
   await expect(page.locator('[data-name="failed-product"] [data-lups-annotation]')).toHaveCount(0);
   await expect(page.locator('[data-name="non-json-product"] [data-lups-annotation]')).toHaveCount(0);
@@ -1289,12 +1315,12 @@ test('Save-On userscript ignores a late response from the previous results query
       <li class="wrapper" data-name="stale-eggs"><article data-testid="ProductCardWrapper-stale-eggs"></article></li>`;
     await fetch('https://storefrontgateway.saveonfoods.com/api/stores/6632/search?q=milk');
   });
-  await expect(page.locator('[data-name="milk-low"] [data-lups-annotation]')).toContainText('$1.00/L · Retailer');
-  await expect(page.locator('[data-name="milk-high"] [data-lups-annotation]')).toContainText('$3.00/L · Retailer');
+  await expect(page.locator('[data-name="milk-low"] [data-lups-annotation]')).toContainText('$1.00/L');
+  await expect(page.locator('[data-name="milk-high"] [data-lups-annotation]')).toContainText('$3.00/L');
   releaseEggs();
   await page.evaluate(() => window.staleSearch);
   await expect(page.locator('[data-name="stale-eggs"] [data-lups-annotation]')).toHaveCount(0);
-  await expect(page.locator('[data-name="milk-low"] [data-lups-annotation]')).toContainText('$1.00/L · Retailer');
+  await expect(page.locator('[data-name="milk-low"] [data-lups-annotation]')).toContainText('$1.00/L');
   await expect(page.locator('#lups-control')).toHaveCount(1);
   expect(pageErrors).toEqual([]);
 });
@@ -1318,8 +1344,8 @@ test('Save-On rejects a throwing snapshot transaction without losing accepted pr
   await page.goto('https://www.saveonfoods.com/sm/pickup/rsid/6632/results?q=milk');
   const high = page.locator('[data-name="milk-high"] [data-lups-annotation]');
   const low = page.locator('[data-name="milk-low"] [data-lups-annotation]');
-  await expect(high).toHaveText('$4.00/L · Retailer');
-  await expect(low).toHaveText('$1.50/L · Retailer');
+  await expect(high).toHaveText('$4.00/L');
+  await expect(low).toHaveText('$1.50/L');
   await choose(page, 'auto-asc');
   const initialOrder = await page.locator('#grid > .wrapper').evaluateAll((wrappers) => wrappers
     .map((wrapper) => ({ name: wrapper.dataset.name, order: Number(wrapper.style.order) }))
@@ -1345,8 +1371,8 @@ test('Save-On rejects a throwing snapshot transaction without losing accepted pr
     document.querySelector('#grid').append(document.createElement('span'));
   });
   await page.waitForTimeout(250);
-  await expect(high).toHaveText('$4.00/L · Retailer');
-  await expect(low).toHaveText('$1.50/L · Retailer');
+  await expect(high).toHaveText('$4.00/L');
+  await expect(low).toHaveText('$1.50/L');
   await expect.poll(() => page.locator('#grid > .wrapper').evaluateAll((wrappers) => wrappers
     .map((wrapper) => ({ name: wrapper.dataset.name, order: Number(wrapper.style.order) }))
     .sort((left, right) => left.order - right.order).map((item) => item.name)))
@@ -1361,7 +1387,7 @@ test('Save-On rejects a throwing snapshot transaction without losing accepted pr
       { id: 'milk-low', name: 'Milk 4 L', currentPrice: 6, unitPrice: '$0.15/100ml' }
     ]
   }, location.origin));
-  await expect(high).toHaveText('$5.00/L · Retailer');
+  await expect(high).toHaveText('$5.00/L');
   expect(pageErrors).toEqual([]);
 });
 
@@ -1491,7 +1517,7 @@ test('a user reload recovers a late Superstore install from current bootstrap da
 
   expect(navigations).toBe(2);
   await expect(page.locator('#lups-control')).toHaveAttribute('data-lups-data-state', 'ready');
-  await expect(page.locator('[data-fixture-id="volume-explicit"] [data-lups-annotation]')).toHaveText('$1.60/L · Retailer');
+  await expect(page.locator('[data-fixture-id="volume-explicit"] [data-lups-annotation]')).toHaveText('$1.60/L');
   await expect(page.locator('#lups-reload')).toBeHidden();
 });
 

@@ -244,10 +244,11 @@ export async function captureForcedColorsControl(page, { outputDirectory, setup 
   expect(evidence.menu.x).toBeGreaterThanOrEqual(0);
   expect(evidence.menu.x + evidence.menu.width).toBeLessThanOrEqual(391);
   expect(evidence.annotations.retailer?.borderStyle).toBe('solid');
-  expect(evidence.annotations.calculated?.borderStyle).toBe('dashed');
-  expect(evidence.annotations.unknown?.borderStyle).toBe('dotted');
-  expect(new Set(Object.values(evidence.annotations).map((style) => style?.color)).size).toBe(1);
-  expect(new Set(Object.values(evidence.annotations).map((style) => style?.backgroundColor)).size).toBe(1);
+  expect(evidence.annotations.calculated?.borderStyle).toBe('solid');
+  expect(evidence.annotations.unknown).toBeNull();
+  const visibleAnnotations = [evidence.annotations.retailer, evidence.annotations.calculated];
+  expect(new Set(visibleAnnotations.map((style) => style?.color)).size).toBe(1);
+  expect(new Set(visibleAnnotations.map((style) => style?.backgroundColor)).size).toBe(1);
   await page.screenshot({
     path: path.join(outputDirectory, 'forced-colors-active-menu.png'),
     fullPage: false
@@ -270,9 +271,10 @@ export function expectControlStateMatrix(evidence) {
   expect(evidence.filter((item) => item.dataState === 'ready').every((item) => item.annotationCount > 0)).toBe(true);
   expect(evidence.filter((item) => item.dataState === 'ready').every((item) => {
     const annotations = item.computedStyles.annotations;
-    return annotations.retailer && annotations.calculated && annotations.unknown
-      && new Set(Object.values(annotations).map((style) => style.backgroundColor)).size === 3
-      && new Set(Object.values(annotations).map((style) => style.color)).size === 3;
+    const visibleAnnotations = [annotations.retailer, annotations.calculated];
+    return annotations.retailer && annotations.calculated && !annotations.unknown
+      && new Set(visibleAnnotations.map((style) => style.backgroundColor)).size === 1
+      && new Set(visibleAnnotations.map((style) => style.color)).size === 1;
   })).toBe(true);
 
   const restoredClosedStates = evidence.filter((item) => item.state === 'restored-closed');

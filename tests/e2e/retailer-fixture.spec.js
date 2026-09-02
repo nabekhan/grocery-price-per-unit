@@ -23,13 +23,14 @@ async function openSaveOn(page) {
   await mockStorage(page);
   await page.route('https://www.saveonfoods.com/test-fixture*', (route) => route.fulfill({ contentType: 'text/html', body: `<!doctype html><style>
     section{display:flex;gap:8px;align-items:center}ul{display:flex;flex-wrap:wrap;padding:0}li{display:block;width:150px;height:100px}article{height:90px}
+    [data-testid^="productCardImage_"]{width:100px;height:60px}
   </style><ul id="carousel">
     <li data-name="carousel-overlap"><article data-testid="ProductCardWrapper-milk-high"></article></li>
     <li data-name="carousel-only"><article data-testid="ProductCardWrapper-carousel-only"></article></li>
   </ul><section><button data-testid="toggleSortByButton"><span>Relevance</span></button></section><ul id="grid">
-    <li data-name="milk-high"><article data-testid="ProductCardWrapper-milk-high"></article></li>
-    <li data-name="eggs"><article data-testid="ProductCardWrapper-eggs"></article></li>
-    <li data-name="milk-low"><article data-testid="ProductCardWrapper-milk-low"></article></li>
+    <li data-name="milk-high"><article data-testid="ProductCardWrapper-milk-high"><div class="save-image"><div data-testid="productCardImage_milk-high-testId"><img alt="Milk"></div></div><div class="ProductCardTitleWrapper">Milk high</div></article></li>
+    <li data-name="eggs"><article data-testid="ProductCardWrapper-eggs"><div class="save-image"><div data-testid="productCardImage_eggs-testId"><img alt="Eggs"></div></div><div class="ProductCardTitleWrapper">Eggs</div></article></li>
+    <li data-name="milk-low"><article data-testid="ProductCardWrapper-milk-low"><div class="save-image"><div data-testid="productCardImage_milk-low-testId"><img alt="Milk"></div></div><div class="ProductCardTitleWrapper">Milk low</div></article></li>
     <li data-name="sponsored-one"><article><div class="pfg-shimmer"><svg aria-label="Loading sponsored product"></svg></div></article></li>
     <li data-name="sponsored-two"><article><div class="pfg-shimmer"><svg aria-label="Loading sponsored product"></svg></div></article></li>
     <li data-name="ordinary-content"><article>Ordinary non-product content</article></li>
@@ -63,6 +64,16 @@ test('Save-On uses its API model with the shared predominant sorter', async ({ p
     .toEqual(['milk-low', 'milk-high', 'eggs']);
   await expect(page.locator('[data-lups-annotation]')).toHaveCount(3);
   await expect(page.locator('#carousel [data-lups-annotation]')).toHaveCount(0);
+  expect(await page.locator('[data-name="milk-high"] article').evaluate((card) => {
+    const image = card.querySelector('[data-testid^="productCardImage_"]');
+    const note = card.querySelector('[data-lups-annotation]');
+    const imageBox = image.getBoundingClientRect();
+    const noteBox = note.getBoundingClientRect();
+    return note.parentElement === image
+      && note.dataset.lupsPlacement === 'image-overlay'
+      && Math.abs(imageBox.right - noteBox.right - 10) <= 1
+      && Math.abs(imageBox.bottom - noteBox.bottom - 10) <= 1;
+  })).toBe(true);
   expect(await page.locator('#carousel > li').evaluateAll((cards) => cards.every((card) => !card.style.order))).toBe(true);
   await expect(page.locator('#lups-status')).toContainText('3 loaded products');
   await expect(page.locator('#lups-control')).toHaveAttribute('data-lups-floating', 'true');
@@ -131,7 +142,7 @@ test('Save-On reads the bounded bridge array length exactly once', async ({ page
   }, location.origin));
   await page.waitForTimeout(0);
   await expect(page.locator('[data-lups-annotation]')).toHaveCount(3);
-  await expect(page.locator('[data-name="milk-high"] [data-lups-annotation]')).toHaveText('$4.00/L · Retailer');
+  await expect(page.locator('[data-name="milk-high"] [data-lups-annotation]')).toHaveText('$4.00/L');
 });
 
 test('Save-On content claims one long-lived runtime when reinjected', async ({ page }) => {
@@ -199,13 +210,13 @@ test('Save-On clears same-query prices across a pickup-route transition', async 
     products: [{ id: 'milk-high', name: 'Milk 1 L', currentPrice: 5, unitPrice: '$0.50/100ml', unitOfSize: { size: 1, abbreviation: 'l' } }]
   }, location.origin));
   await expect(page.locator('[data-lups-annotation]')).toHaveCount(1);
-  await expect(page.locator('[data-name="milk-high"] [data-lups-annotation]')).toHaveText('$5.00/L · Retailer');
+  await expect(page.locator('[data-name="milk-high"] [data-lups-annotation]')).toHaveText('$5.00/L');
   await expect(page.locator('#lups-status')).not.toContainText('Website order preserved');
 });
 
 test('Save-On annotates a cached lazy card during continuous retailer DOM churn', async ({ page }) => {
   await openSaveOn(page);
-  await expect(page.locator('[data-name="milk-low"] [data-lups-annotation]')).toHaveText('$1.50/L · Retailer');
+  await expect(page.locator('[data-name="milk-low"] [data-lups-annotation]')).toHaveText('$1.50/L');
   await page.waitForTimeout(250);
   await page.evaluate(() => {
     document.querySelector('[data-name="milk-low"]').remove();
@@ -224,7 +235,7 @@ test('Save-On annotates a cached lazy card during continuous retailer DOM churn'
     }, 2_000);
   });
   await expect(page.locator('[data-name="milk-low-lazy"] [data-lups-annotation]'))
-    .toHaveText('$1.50/L · Retailer', { timeout: 1_200 });
+    .toHaveText('$1.50/L', { timeout: 1_200 });
   expect(await page.evaluate(() => window.__saveonChurnStopped)).toBe(false);
   await page.evaluate(() => {
     clearInterval(window.__saveonChurnInterval);
@@ -264,7 +275,7 @@ test('Save-On rejects unsafe bridge prices and reconstructs only bounded size fi
   }, location.origin));
 
   await expect(page.locator('#grid [data-lups-annotation]')).toHaveCount(1);
-  await expect(page.locator('[data-name="milk-low"] [data-lups-annotation]')).toHaveText('$1.50/L · Calculated');
+  await expect(page.locator('[data-name="milk-low"] [data-lups-annotation]')).toHaveText('$1.50/L');
   await expect(page.locator('[data-name="milk-high"] [data-lups-annotation]')).toHaveCount(0);
   await expect(page.locator('[data-name="eggs"] [data-lups-annotation]')).toHaveCount(0);
   expect(pageErrors).toEqual([]);
@@ -306,7 +317,7 @@ test('Save-On rescans a recycled card when only its product identity changes', a
 
   const recycled = page.locator('[data-name="milk-high"] article');
   await recycled.evaluate((article) => article.setAttribute('data-testid', 'ProductCardWrapper-replacement'));
-  await expect(page.locator('[data-name="milk-high"] [data-lups-annotation]')).toHaveText('$1.00/L · Retailer');
+  await expect(page.locator('[data-name="milk-high"] [data-lups-annotation]')).toHaveText('$1.00/L');
   await expect.poll(() => visualOrder(page, '#grid > li:has(article[data-testid^="ProductCardWrapper-"])'))
     .toEqual(['milk-high', 'milk-low', 'eggs']);
 

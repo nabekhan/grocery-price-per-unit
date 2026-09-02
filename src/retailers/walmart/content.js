@@ -1,4 +1,9 @@
 import { formatUnitPrice, speakUnitPrice } from '../../ui/format.js';
+import {
+    clearAnnotation,
+    placeAnnotationOnProductImage,
+    syncAnnotationAccessibility
+} from '../../ui/annotation-placement.js';
 import { MAX_RENDERED_CARDS, publishApiScanState } from './scan-state.js';
 import { claimRuntimeInstall } from '../../runtime/install.js';
 import { areOnlyOwnedMutations } from '../../runtime/mutations.js';
@@ -724,7 +729,7 @@ function convertUnitObject(unitObj, preferredUnit) {
 }
 
 function clearSortModel(container) {
-    container.querySelector('.price-per-unit-info')?.remove();
+    clearAnnotation(container);
     delete container.dataset.ppuSortValue;
     delete container.dataset.ppuSortDimension;
     delete container.dataset.ppuSortUnit;
@@ -781,8 +786,9 @@ function showPricePerUnit(container, price, unitObj, _promo, _couponValue, walma
         container.dataset.ppuSortDimension = sortable.dimension;
         container.dataset.ppuSortUnit = sortable.unit;
         infoDiv.dataset.source = usedWalmartPPU ? 'retailer' : 'calculated';
-        const origin = usedWalmartPPU ? 'Retailer' : 'Calculated';
-        infoDiv.textContent = `${formatUnitPrice(sortable.value, sortable.unit)} · ${origin}`;
+        // Keep the visual overlay compact; its tooltip and accessible name
+        // retain whether Walmart supplied or the userscript calculated it.
+        infoDiv.textContent = formatUnitPrice(sortable.value, sortable.unit);
         infoDiv.title = usedWalmartPPU ? 'Unit price supplied by the retailer API' : 'Calculated from retailer API package and price data';
         const description = `${infoDiv.title[0].toLowerCase()}${infoDiv.title.slice(1)}`;
         infoDiv.setAttribute('aria-label', `${speakUnitPrice(sortable.value, sortable.unit)}, ${description}`);
@@ -791,13 +797,11 @@ function showPricePerUnit(container, price, unitObj, _promo, _couponValue, walma
         return;
     }
 
-    // Insert after price
-    const priceEl = container.querySelector('[data-automation-id="product-price"]');
-    if (priceEl && priceEl.parentNode) {
-        priceEl.parentNode.insertBefore(infoDiv, priceEl.nextSibling);
-    } else {
-        container.prepend(infoDiv);
-    }
+    // Use the same image-overlay contract as every other retailer. If Walmart
+    // changes or withholds its marker, fail open to the card instead of guessing
+    // through unrelated content or colliding with the Add control.
+    placeAnnotationOnProductImage(container, infoDiv);
+    syncAnnotationAccessibility(container, infoDiv);
 
     return pricePerUnit;
 }

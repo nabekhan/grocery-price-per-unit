@@ -19,7 +19,19 @@ export function findProductGrid(document) {
       if (inspectedChildren + grid.children.length > MAX_RENDERED_CARDS) return null;
       inspectedChildren += grid.children.length;
       for (const child of grid.children) {
-        if (child.querySelector('[data-testid="product-title"]')) cards.push(child);
+        const title = child.querySelector('[data-testid="product-title"]');
+        if (title) {
+          cards.push(child);
+          continue;
+        }
+        // Loblaw's current cards no longer expose the former product-title
+        // test ID. Inside a verified product-grid component, the conjunction
+        // of its semantic image marker and a product-detail URL is the stable
+        // replacement. Prices still come exclusively from the matched API ID.
+        const image = child.querySelector('[data-testid="product-image"]');
+        const link = child.querySelector('a[href*="/product/"], a[href*="/p/"]');
+        const href = link?.getAttribute('href') || '';
+        if (image && /(?:^|\/)(?:product|p)\/[^/?#]+/i.test(href)) cards.push(child);
       }
     }
     if (cards.length >= 3) return [semanticGrids.find((grid) => grid.children.length) || semanticGrids[0], cards, semanticGrids];
