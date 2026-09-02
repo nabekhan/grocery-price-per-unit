@@ -1,6 +1,6 @@
 import { extractGrid } from './site.js';
 import { isSortableTotalPrice, sortModels } from '../../sorting/sort.js';
-import { annotate, createControl, injectStyles, updateStatus } from '../../ui/control.js';
+import { annotate, clearAnnotation, createControl, injectStyles, updateStatus } from '../../ui/control.js';
 import { claimRuntimeInstall } from '../../runtime/install.js';
 import { areOnlyOwnedMutations } from '../../runtime/mutations.js';
 import { captureWaitState, createScanScheduler } from '../../runtime/retailer-lifecycle.js';
@@ -232,7 +232,7 @@ function reconcileManagedCards(models = []) {
   for (const card of managedCards) {
     if (current.has(card)) continue;
     released.push(card);
-    card.querySelector('[data-lups-annotation]')?.remove();
+    clearAnnotation(card);
     delete card.dataset.lupsDataSource;
     managedCards.delete(card);
   }
@@ -330,7 +330,7 @@ function scan() {
   for (const model of models) model.card.dataset.lupsDataSource = model.dataSource;
   for (const model of models) {
     if (model.dataSource === 'api') annotate(model);
-    else model.card.querySelector('[data-lups-annotation]')?.remove();
+    else clearAnnotation(model.card);
   }
   if (state.restored) return restore(models, control, excludedCards.size);
   if (apiScope !== scope) {
