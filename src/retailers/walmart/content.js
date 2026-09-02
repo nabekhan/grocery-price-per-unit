@@ -505,21 +505,24 @@ function amountInBaseUnit(amount, unit) {
 
 // This uses only the already-sanitized response record. No product card,
 // image, title element, or retailer DOM price is consulted while planning.
-function modelForApiSnapshot(product) {
+export function modelForApiSnapshot(product) {
     const currentPrice = Number.isFinite(product?.price) ? product.price : product?.averagePrice;
     if (!product?.id || !product?.name || !Number.isFinite(currentPrice) || currentPrice <= 0) return null;
     const unitPrice = extractApiPricePerUnit(product);
     let unitObj = extractUnitFromTitle(product.name, unitPrice ? dimensionForUnit(unitPrice.unit) : null);
     if (product.variableOptions === true) unitObj = resolveVariableOptionUnit(product, product.name, unitObj);
-    const base = unitPrice ? amountInBaseUnit(unitPrice.amount, unitPrice.unit) : null;
-    const dimension = unitPrice ? dimensionForUnit(unitPrice.unit) : dimensionForUnit(unitObj?.unit);
+    const sourceUnit = unitPrice?.unit || unitObj?.unit;
+    const pricePerUnit = unitPrice
+        ? pricePerStandardUnit(unitPrice.value, { amount: unitPrice.amount, unit: unitPrice.unit })
+        : pricePerStandardUnit(currentPrice, unitObj);
+    const sortable = normalizePriceForSorting(pricePerUnit, sourceUnit);
     return {
         matched: true,
         productId: product.id,
         name: product.name,
         currentPrice,
-        normalizedUnitPrice: unitPrice && base ? unitPrice.value / base : pricePerStandardUnit(currentPrice, unitObj),
-        dimension: ['mass', 'volume', 'count'].includes(dimension) ? dimension : null
+        normalizedUnitPrice: sortable?.value || null,
+        dimension: sortable?.dimension || null
     };
 }
 

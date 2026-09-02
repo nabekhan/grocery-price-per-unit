@@ -32,6 +32,9 @@
     },
     "2.2.1": {
       "userscriptSha256": "33f12c5c302d27e7ad420d911f6f9e7d13f6827a8ea733084282b50447e286bf"
+    },
+    "2.2.2": {
+      "userscriptSha256": "784cbf4a19c9c7af4b115009984fe05731370d39af4a0c28d9fd9b50d9b04384"
     }
   }
 }

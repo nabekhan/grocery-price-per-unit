@@ -1,6 +1,6 @@
 {
   "name": "grocery-price-per-unit",
-  "version": "2.2.1",
+  "version": "2.2.2",
   "description": "A documented Safari userscript for comparable grocery unit prices across four Canadian storefronts.",
   "private": true,
   "license": "GPL-3.0-only",

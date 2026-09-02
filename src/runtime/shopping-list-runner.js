@@ -14,12 +14,13 @@ import { sortModels } from '../sorting/sort.js';
  * explicitly preview a list and explicitly start its Add phase.
  */
 
-// V5 deliberately invalidates candidates saved by the earlier page-navigation
-// and price-only matching workflows. Those candidates could have come from a
-// stale SPA snapshot or a loosely related search result, so an upgraded run
-// must preview them again through the scoped API and shared relevance gate.
-export const SHOPPING_RUN_STORAGE_KEY = 'shoppingListRunV5';
-const RUN_VERSION = 5;
+// V7 deliberately invalidates candidates saved by the earlier page-navigation
+// and price-only matching workflows, Walmart candidates saved before its
+// retailer unit-price normalization was corrected, and optimistic Walmart
+// updates that predated fresh-cart verification. An upgraded run must preview
+// them again through the scoped API and shared relevance gate.
+export const SHOPPING_RUN_STORAGE_KEY = 'shoppingListRunV7';
+const RUN_VERSION = 7;
 const MAX_ITEMS = 40;
 const MAX_QUERY_LENGTH = 120;
 const MAX_REASON_LENGTH = 240;

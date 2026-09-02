@@ -1,6 +1,7 @@
 import { claimRuntimeInstall } from '../../runtime/install.js';
 import { createRetailerCartAdapter } from '../../runtime/retailer-cart-adapter.js';
 import { createShoppingListRunner } from '../../runtime/shopping-list-runner.js';
+import { modelForApiSnapshot } from './content.js';
 
 /*
  * Walmart's old Cart Builder adapter navigated search pages, scrolled the
@@ -14,10 +15,29 @@ export function createWalmartShoppingAdapter(capture) {
     searchUnavailableReason: 'Walmart search API is unavailable.',
     cartUnavailableReason: 'Walmart cart API is unavailable.',
     queryProducts: typeof capture?.queryProducts === 'function'
-      ? (query, options) => capture.queryProducts(query, options)
+      ? async (query, options) => {
+        const response = await capture.queryProducts(query, options);
+        if (response?.status !== 'complete' || !Array.isArray(response.products)) return response;
+        return {
+          status: 'complete',
+          products: response.products.map((product) => {
+            const model = modelForApiSnapshot(product);
+            if (!model || !product?.cartKey) return null;
+            return {
+              ...model,
+              productId: product.cartKey,
+              matched: true,
+              addable: product.addable === true
+            };
+          }).filter(Boolean)
+        };
+      }
       : null,
     addProduct: typeof capture?.addProduct === 'function'
-      ? (candidate, options) => capture.addProduct(candidate?.productId, options)
+      ? (candidate, options) => capture.addProduct(candidate?.productId, {
+        ...options,
+        name: candidate?.name
+      })
       : null,
     reviewCart: typeof capture?.readCart === 'function'
       ? (candidates) => capture.readCart(

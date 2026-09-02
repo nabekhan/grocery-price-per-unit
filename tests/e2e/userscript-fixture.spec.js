@@ -548,7 +548,7 @@ test('Walmart userscript starts at document-start and carries captured API data 
   expect(pageErrors).toEqual([]);
 });
 
-test('Walmart cart builder never falls back to page navigation or DOM cart controls', async ({ page }) => {
+test('Walmart cart builder never falls back to page navigation or DOM cart controls for incomplete API products', async ({ page }) => {
   const pageErrors = [];
   page.on('pageerror', (error) => pageErrors.push(error.message));
   await page.addInitScript({ content: userscript });
@@ -606,9 +606,9 @@ test('Walmart cart builder never falls back to page navigation or DOM cart contr
   await page.locator('#gppu-shopping-input').fill('bananas');
   await page.getByRole('button', { name: 'Preview items' }).click();
 
-  await expect(page.getByRole('button', { name: 'Retry', exact: true })).toBeVisible({ timeout: 8_000 });
+  await expect(page.getByRole('strong')).toHaveText('bananas — missed');
   await expect(page.getByRole('heading', { name: 'Cart builder' })).toHaveCount(0);
-  await expect(page.locator('#gppu-shopping-status')).toContainText('Walmart search API is unavailable.');
+  await expect(page.getByText('No in-stock, verified product was returned.')).toBeVisible();
   await expect(page).toHaveURL(startUrl);
   // A captured snapshot may still power the price sorter, but Cart Builder no
   // longer scrolls or clicks it as a fallback when no active API exists.
@@ -618,6 +618,87 @@ test('Walmart cart builder never falls back to page navigation or DOM cart contr
     path: path.join(root, 'artifacts/screenshots/shopping-list/walmart-preview.png'),
     fullPage: false
   });
+  expect(pageErrors).toEqual([]);
+});
+
+test('Walmart cart builder completes through search and cart APIs without navigating', async ({ page }) => {
+  const pageErrors = [];
+  const cartId = 'cart-fixture';
+  let cartLines = [];
+  let addedInput = null;
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+  await page.addInitScript({ content: userscript });
+
+  const walmartProducts = (query) => query === 'eggs' ? [
+    {
+      id: 'PRD-expensive-eggs', usItemId: 'US-expensive-eggs', offerId: 'OFFER-expensive-eggs',
+      name: 'Premium Eggs 12 count', availabilityStatusV2: { value: 'IN_STOCK' },
+      priceInfo: { currentPrice: { price: 7.99 }, unitPrice: { priceString: '$0.67/each' } }
+    },
+    {
+      id: 'PRD-value-eggs', usItemId: 'US-value-eggs', offerId: 'OFFER-value-eggs',
+      name: 'Value Eggs 12 count', availabilityStatusV2: { value: 'IN_STOCK' },
+      priceInfo: { currentPrice: { price: 4.18 }, unitPrice: { priceString: '$0.35/each' } }
+    }
+  ] : [];
+  await page.route('https://www.walmart.ca/orchestra/snb/graphql/search*', async (route) => {
+    const variables = JSON.parse(new URL(route.request().url()).searchParams.get('variables'));
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({ data: { search: { itemStacks: [{ itemsV2: walmartProducts(variables.query) }] } } })
+    });
+  });
+  await page.route('https://www.walmart.ca/orchestra/graphql/MergeAndGetCart/**', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify({ data: { mergeAndGetCart: { id: cartId, lineItems: cartLines } } })
+  }));
+  await page.route('https://www.walmart.ca/orchestra/graphql/updateItems/**', async (route) => {
+    addedInput = route.request().postDataJSON().variables.input;
+    const item = addedInput.items[0];
+    cartLines = [{ quantity: item.quantity, product: {
+      offerId: item.offerId, usItemId: item.usItemId, name: item.name
+    } }];
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({ data: { updateItems: { id: cartId, lineItems: cartLines } } })
+    });
+  });
+  await page.route('https://www.walmart.ca/walmart-cart-api-fixture/**', (route) => route.fulfill({
+    contentType: 'text/html',
+    body: `<!doctype html><html><body><main><div id="grid"></div></main>
+      <script>
+        fetch('/orchestra/graphql/MergeAndGetCart/' + 'a'.repeat(64));
+        fetch('/orchestra/snb/graphql/search?variables=' + encodeURIComponent(JSON.stringify({
+          query:'seed', page:1, searchArgs:{query:'seed'},
+          searchParams:{query:'seed',page:1,searchArgs:{query:'seed'}}
+        })));
+      </script></body></html>`
+  }));
+
+  const startUrl = 'https://www.walmart.ca/walmart-cart-api-fixture/search?q=seed';
+  await page.goto(startUrl);
+  // With no rendered product cards, the sorter is intentionally absent and
+  // Cart Builder occupies the same standalone corner position.
+  await expect(page.locator('#gppu-shopping-toggle')).toBeVisible();
+  await page.locator('#gppu-shopping-toggle').click();
+  await page.locator('#gppu-shopping-input').fill('eggs');
+  await page.getByRole('button', { name: 'Preview items' }).click();
+
+  await expect(page.getByRole('strong')).toHaveText('eggs');
+  await expect(page.getByText('Value Eggs 12 count · $4.18 · $0.35/each')).toBeVisible();
+  await page.getByRole('button', { name: 'Add', exact: true }).click();
+  await expect(page.getByRole('strong')).toHaveText('eggs — added');
+  await expect(page.getByRole('button', { name: 'Start another list' })).toBeVisible();
+
+  await expect(page).toHaveURL(startUrl);
+  expect(addedInput).toMatchObject({
+    cartId,
+    items: [{
+      offerId: 'OFFER-value-eggs', usItemId: 'US-value-eggs',
+      quantity: 1, name: 'Value Eggs 12 count'
+    }]
+  });
+  expect(cartLines).toHaveLength(1);
   expect(pageErrors).toEqual([]);
 });
 
