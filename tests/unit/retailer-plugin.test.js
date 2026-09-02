@@ -5,6 +5,7 @@ function plugin(overrides = {}) {
   return defineRetailerPlugin({
     id: 'fixture',
     hostnames: ['shop.example.ca'],
+    isSearchPage: vi.fn((url) => url.pathname === '/search'),
     getScope: vi.fn(() => 'scope:fixture'),
     installCapture: vi.fn(() => true),
     installRuntime: vi.fn(() => true),
@@ -20,13 +21,14 @@ describe('formal retailer plugin contract', () => {
       installRuntime: vi.fn((_global, context) => order.push(['runtime', context]))
     });
     const result = installRetailerPlugin(fixture, {
-      location: { hostname: 'shop.example.ca' },
+      location: { hostname: 'shop.example.ca', href: 'https://shop.example.ca/search?q=milk' },
       document: { readyState: 'loading' }
     });
 
     expect(order.map(([phase]) => phase)).toEqual(['capture', 'runtime']);
     expect(order[0][1]).toMatchObject({ id: 'fixture', hostname: 'shop.example.ca', installedAtDocumentStart: true });
     expect(order[0][1].lifecycle.currentScope()).toBe('scope:fixture');
+    expect(order[0][1].isSearchPage()).toBe(true);
     expect(order[0][1]).toBe(order[1][1]);
     expect(Object.isFrozen(order[0][1])).toBe(true);
     expect(result).toEqual({ matched: true, id: 'fixture', captureInstalled: true, runtimeInstalled: true });
@@ -35,7 +37,7 @@ describe('formal retailer plugin contract', () => {
   it('leaves every plugin phase inert on an unrelated or near-match host', () => {
     const fixture = plugin();
     expect(installRetailerPlugin(fixture, {
-      location: { hostname: 'shop.example.ca.attacker.test' },
+      location: { hostname: 'shop.example.ca.attacker.test', href: 'https://shop.example.ca.attacker.test/search' },
       document: { readyState: 'complete' }
     })).toEqual({ matched: false, id: 'fixture' });
     expect(fixture.installCapture).not.toHaveBeenCalled();
@@ -46,9 +48,10 @@ describe('formal retailer plugin contract', () => {
     [{ id: 'Bad ID' }, 'stable lowercase identifier'],
     [{ hostnames: [] }, 'exact hostnames'],
     [{ hostnames: ['shop.example.ca', 'shop.example.ca'] }, 'repeats a hostname'],
-    [{ getScope: null }, 'scope, capture, and runtime contracts'],
-    [{ installCapture: null }, 'scope, capture, and runtime contracts'],
-    [{ installRuntime: null }, 'scope, capture, and runtime contracts']
+    [{ isSearchPage: null }, 'search-page, scope, capture, and runtime contracts'],
+    [{ getScope: null }, 'search-page, scope, capture, and runtime contracts'],
+    [{ installCapture: null }, 'search-page, scope, capture, and runtime contracts'],
+    [{ installRuntime: null }, 'search-page, scope, capture, and runtime contracts']
   ])('rejects an invalid contract: %j', (override, message) => {
     expect(() => plugin(override)).toThrow(message);
   });

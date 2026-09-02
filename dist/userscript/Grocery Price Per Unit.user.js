@@ -1,7 +1,9 @@
 // ==UserScript==
 // @name        Grocery Price Per Unit
-// @version     2.0.13
+// @version     2.0.14
 // @description Shows and sorts comparable unit prices on Walmart Canada, Real Canadian Superstore, No Frills, and Save-On-Foods.
+// @downloadURL https://github.com/nabekhan/grocery-price-per-unit/releases/latest/download/Grocery-Price-Per-Unit.user.js
+// @updateURL   https://github.com/nabekhan/grocery-price-per-unit/releases/latest/download/Grocery-Price-Per-Unit.user.js
 // @match       https://www.realcanadiansuperstore.ca/*
 // @match       https://www.nofrills.ca/*
 // @match       https://www.walmart.ca/*
@@ -333,18 +335,19 @@ if (hostname === 'www.realcanadiansuperstore.ca' || hostname === 'www.nofrills.c
    */
   var ID_PATTERN = /^[a-z][a-z0-9-]{0,63}$/;
   var HOST_PATTERN = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/;
-  function defineRetailerPlugin({ id, hostnames, getScope, installCapture, installRuntime }) {
+  function defineRetailerPlugin({ id, hostnames, isSearchPage: isSearchPage2, getScope, installCapture, installRuntime }) {
     if (!ID_PATTERN.test(id || "")) throw new TypeError("Retailer plugin id must be a stable lowercase identifier");
     if (!Array.isArray(hostnames) || !hostnames.length || hostnames.some((host) => !HOST_PATTERN.test(host))) {
       throw new TypeError(`Retailer plugin ${id} must declare exact hostnames`);
     }
     if (new Set(hostnames).size !== hostnames.length) throw new TypeError(`Retailer plugin ${id} repeats a hostname`);
-    if (typeof getScope !== "function" || typeof installCapture !== "function" || typeof installRuntime !== "function") {
-      throw new TypeError(`Retailer plugin ${id} must implement scope, capture, and runtime contracts`);
+    if (typeof isSearchPage2 !== "function" || typeof getScope !== "function" || typeof installCapture !== "function" || typeof installRuntime !== "function") {
+      throw new TypeError(`Retailer plugin ${id} must implement search-page, scope, capture, and runtime contracts`);
     }
     return Object.freeze({
       id,
       hostnames: Object.freeze([...hostnames]),
+      isSearchPage: isSearchPage2,
       getScope,
       installCapture,
       installRuntime
@@ -357,6 +360,15 @@ if (hostname === 'www.realcanadiansuperstore.ca' || hostname === 'www.nofrills.c
       id: plugin2.id,
       hostname,
       installedAtDocumentStart: global.document?.readyState === "loading",
+      // Page eligibility is deliberately retailer-owned. The shared host/runtime
+      // can suspend work consistently without learning any retailer URL shape.
+      isSearchPage: () => {
+        try {
+          return plugin2.isSearchPage(new URL(global.location?.href));
+        } catch {
+          return false;
+        }
+      },
       lifecycle: createRetailerLifecycle({
         global,
         id: plugin2.id,
@@ -1799,6 +1811,7 @@ if (hostname === 'www.realcanadiansuperstore.ca' || hostname === 'www.nofrills.c
   var scopeWatcher = null;
   var lifecycle = null;
   var scheduleScan = null;
+  var isSearchPage = () => true;
   var debug = false;
   var log = (...args) => {
     if (debug) console.info("[Grocery Price Per Unit: Loblaw]", ...args);
@@ -2048,7 +2061,17 @@ if (hostname === 'www.realcanadiansuperstore.ca' || hostname === 'www.nofrills.c
     restoreOrdering();
     updateStatus(control, { total: models.length, excluded, restored: true });
   }
+  function leaveSearchPage() {
+    for (const [card] of hiddenPromotions) restorePromotion(card);
+    reconcileManagedCards();
+    restoreOrdering();
+    document.getElementById("lups-control")?.remove();
+  }
   function scan() {
+    if (!isSearchPage()) {
+      leaveSearchPage();
+      return;
+    }
     restoreStalePromotions();
     const scope = currentScope();
     if (apiScope !== scope) {
@@ -2142,6 +2165,7 @@ if (hostname === 'www.realcanadiansuperstore.ca' || hostname === 'www.nofrills.c
   function installLoblawRuntime(context = {}) {
     if (!claimRuntimeInstall("loblaw-content")) return false;
     lifecycle = context.lifecycle || null;
+    isSearchPage = typeof context.isSearchPage === "function" ? context.isSearchPage : () => true;
     scheduleScan = createScanScheduler(window, scan, { delayMs: 180 });
     lifecycle?.subscribe(() => schedule({ urgent: true }));
     window.addEventListener("message", ingestApiMessage);
@@ -2151,10 +2175,24 @@ if (hostname === 'www.realcanadiansuperstore.ca' || hostname === 'www.nofrills.c
     return true;
   }
 
+  // src/retailers/loblaw/routes.js
+  /*!
+   * Loblaw storefront route selector. The terminal `search` segment covers both
+   * `/search` and locale-prefixed routes such as `/en/search`. A non-empty
+   * `search-bar` parameter also identifies fixture/legacy search routes without
+   * accidentally enabling category pages.
+   */
+  function isLoblawSearchPage(url) {
+    if (!(url instanceof URL)) return false;
+    const terminalSegment = url.pathname.split("/").filter(Boolean).at(-1)?.toLowerCase();
+    return terminalSegment === "search" || Boolean(url.searchParams.get("search-bar")?.trim());
+  }
+
   // src/retailers/loblaw/plugin.js
   var plugin = defineRetailerPlugin({
     id: "loblaw",
     hostnames: ["www.realcanadiansuperstore.ca", "www.nofrills.ca"],
+    isSearchPage: isLoblawSearchPage,
     getScope: () => getLoblawScope(),
     installCapture: (global) => installLoblawCapture(global),
     installRuntime: (_global, context) => installLoblawRuntime(context)
@@ -2331,18 +2369,19 @@ if (hostname === 'www.walmart.ca') {
    */
   var ID_PATTERN = /^[a-z][a-z0-9-]{0,63}$/;
   var HOST_PATTERN = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/;
-  function defineRetailerPlugin({ id, hostnames, getScope, installCapture, installRuntime }) {
+  function defineRetailerPlugin({ id, hostnames, isSearchPage: isSearchPage3, getScope, installCapture, installRuntime }) {
     if (!ID_PATTERN.test(id || "")) throw new TypeError("Retailer plugin id must be a stable lowercase identifier");
     if (!Array.isArray(hostnames) || !hostnames.length || hostnames.some((host) => !HOST_PATTERN.test(host))) {
       throw new TypeError(`Retailer plugin ${id} must declare exact hostnames`);
     }
     if (new Set(hostnames).size !== hostnames.length) throw new TypeError(`Retailer plugin ${id} repeats a hostname`);
-    if (typeof getScope !== "function" || typeof installCapture !== "function" || typeof installRuntime !== "function") {
-      throw new TypeError(`Retailer plugin ${id} must implement scope, capture, and runtime contracts`);
+    if (typeof isSearchPage3 !== "function" || typeof getScope !== "function" || typeof installCapture !== "function" || typeof installRuntime !== "function") {
+      throw new TypeError(`Retailer plugin ${id} must implement search-page, scope, capture, and runtime contracts`);
     }
     return Object.freeze({
       id,
       hostnames: Object.freeze([...hostnames]),
+      isSearchPage: isSearchPage3,
       getScope,
       installCapture,
       installRuntime
@@ -2355,6 +2394,15 @@ if (hostname === 'www.walmart.ca') {
       id: plugin2.id,
       hostname,
       installedAtDocumentStart: global.document?.readyState === "loading",
+      // Page eligibility is deliberately retailer-owned. The shared host/runtime
+      // can suspend work consistently without learning any retailer URL shape.
+      isSearchPage: () => {
+        try {
+          return plugin2.isSearchPage(new URL(global.location?.href));
+        } catch {
+          return false;
+        }
+      },
       lifecycle: createRetailerLifecycle({
         global,
         id: plugin2.id,
@@ -3312,6 +3360,7 @@ if (hostname === 'www.walmart.ca') {
   var apiProductScope = null;
   var apiMessageGeneration = 0;
   var lifecycle = null;
+  var isSearchPage = () => true;
   function reportApiStatus(level, message, details) {
     try {
       const logger = console?.[level];
@@ -3978,7 +4027,29 @@ if (hostname === 'www.walmart.ca') {
     const changedNodes = [...mutation.addedNodes, ...mutation.removedNodes];
     return changedNodes.length > 0 && changedNodes.every(ownedNode);
   }
+  function leaveSearchPage() {
+    let exposedStateChanged = false;
+    const managedIterator = setValues(managedProductContainers);
+    for (let step = setIteratorNext(managedIterator); !step.done; step = setIteratorNext(managedIterator)) {
+      const container = step.value;
+      const previousState = ownedStateSignature(container);
+      clearSortModel(container);
+      delete container.dataset.ppuTotalPrice;
+      delete container.dataset.ppuDataSource;
+      delete container.dataset.ppuProcessingError;
+      weakMapDelete(processedSignatures, container);
+      weakMapDelete(processedStates, container);
+      setDelete(managedProductContainers, container);
+      exposedStateChanged ||= previousState !== ownedStateSignature(container);
+    }
+    const publication = publishApiScanState({ accepted: false, renderedCards: 0, apiCards: 0 }, []);
+    if (exposedStateChanged || publication.changed) window.dispatchEvent(new CustomEvent("ppu-products-updated"));
+  }
   function processProducts(isForced = false, apiReport = null) {
+    if (!isSearchPage()) {
+      leaveSearchPage();
+      return;
+    }
     const productContainers = document.querySelectorAll("[data-item-id]");
     let exposedStateChanged = false;
     if (productContainers.length > MAX_RENDERED_CARDS) {
@@ -4186,6 +4257,7 @@ if (hostname === 'www.walmart.ca') {
   function installWalmartAnnotator(context = {}) {
     if (!claimRuntimeInstall("walmart-content")) return false;
     lifecycle = context.lifecycle || null;
+    isSearchPage = typeof context.isSearchPage === "function" ? context.isSearchPage : () => true;
     productScanScheduler = createScanScheduler(window, runProductScan, { delayMs: 150 });
     window.addEventListener("message", ingestApiProductsMessage);
     reportApiStatus("info", "page-world bridge ready; requesting captured product snapshot");
@@ -4877,6 +4949,7 @@ if (hostname === 'www.walmart.ca') {
   var lifecycle2 = null;
   var scheduleScan = null;
   var observer = null;
+  var isSearchPage2 = () => true;
   function userscriptStorage() {
     return globalThis[Symbol.for("grocery-price-per-unit.storage.v1")]?.storage;
   }
@@ -5011,6 +5084,11 @@ if (hostname === 'www.walmart.ca') {
   }
   function scan() {
     for (const [wrapper] of hiddenBySorter) restoreWrapperDisplay(wrapper);
+    if (!isSearchPage2()) {
+      reconcileManagedWrappers();
+      document.getElementById("lups-control")?.remove();
+      return;
+    }
     const apiScan = readApiScanState();
     const found = findGrid(apiScan);
     if (!found) {
@@ -5122,11 +5200,24 @@ if (hostname === 'www.walmart.ca') {
   function installWalmartSorter(context = {}) {
     if (!claimRuntimeInstall("walmart-sort")) return false;
     lifecycle2 = context.lifecycle || null;
+    isSearchPage2 = typeof context.isSearchPage === "function" ? context.isSearchPage : () => true;
     scheduleScan = createScanScheduler(window, scan, { delayMs: 150 });
     lifecycle2?.subscribe(() => schedule({ urgent: true }));
     if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", start, { once: true });
     else start();
     return true;
+  }
+
+  // src/retailers/walmart/routes.js
+  /*!
+   * Walmart Canada route selector. Search currently lives at `/en/search`; the
+   * terminal-segment check remains locale-agnostic. `q` supports older and test
+   * search routes while still requiring explicit search intent.
+   */
+  function isWalmartSearchPage(url) {
+    if (!(url instanceof URL)) return false;
+    const terminalSegment = url.pathname.split("/").filter(Boolean).at(-1)?.toLowerCase();
+    return terminalSegment === "search" || Boolean(url.searchParams.get("q")?.trim());
   }
 
   // src/retailers/walmart/userscript-main.js
@@ -5138,6 +5229,7 @@ if (hostname === 'www.walmart.ca') {
   var plugin = defineRetailerPlugin({
     id: "walmart",
     hostnames: ["www.walmart.ca"],
+    isSearchPage: isWalmartSearchPage,
     getScope: () => getWalmartScope(),
     installCapture: (global) => installWalmartCapture(global),
     installRuntime: (_global, context) => {
@@ -5318,18 +5410,19 @@ if (hostname === 'www.saveonfoods.com') {
    */
   var ID_PATTERN = /^[a-z][a-z0-9-]{0,63}$/;
   var HOST_PATTERN = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/;
-  function defineRetailerPlugin({ id, hostnames, getScope, installCapture, installRuntime }) {
+  function defineRetailerPlugin({ id, hostnames, isSearchPage: isSearchPage2, getScope, installCapture, installRuntime }) {
     if (!ID_PATTERN.test(id || "")) throw new TypeError("Retailer plugin id must be a stable lowercase identifier");
     if (!Array.isArray(hostnames) || !hostnames.length || hostnames.some((host) => !HOST_PATTERN.test(host))) {
       throw new TypeError(`Retailer plugin ${id} must declare exact hostnames`);
     }
     if (new Set(hostnames).size !== hostnames.length) throw new TypeError(`Retailer plugin ${id} repeats a hostname`);
-    if (typeof getScope !== "function" || typeof installCapture !== "function" || typeof installRuntime !== "function") {
-      throw new TypeError(`Retailer plugin ${id} must implement scope, capture, and runtime contracts`);
+    if (typeof isSearchPage2 !== "function" || typeof getScope !== "function" || typeof installCapture !== "function" || typeof installRuntime !== "function") {
+      throw new TypeError(`Retailer plugin ${id} must implement search-page, scope, capture, and runtime contracts`);
     }
     return Object.freeze({
       id,
       hostnames: Object.freeze([...hostnames]),
+      isSearchPage: isSearchPage2,
       getScope,
       installCapture,
       installRuntime
@@ -5342,6 +5435,15 @@ if (hostname === 'www.saveonfoods.com') {
       id: plugin2.id,
       hostname,
       installedAtDocumentStart: global.document?.readyState === "loading",
+      // Page eligibility is deliberately retailer-owned. The shared host/runtime
+      // can suspend work consistently without learning any retailer URL shape.
+      isSearchPage: () => {
+        try {
+          return plugin2.isSearchPage(new URL(global.location?.href));
+        } catch {
+          return false;
+        }
+      },
       lifecycle: createRetailerLifecycle({
         global,
         id: plugin2.id,
@@ -6708,6 +6810,7 @@ if (hostname === 'www.saveonfoods.com') {
   var observer = null;
   var lifecycle = null;
   var scheduleScan = null;
+  var isSearchPage = () => true;
   function messageScope(context) {
     const rawQuery = context?.query;
     const rawStoreId = context?.storeId;
@@ -6916,7 +7019,16 @@ if (hostname === 'www.saveonfoods.com') {
       scan();
     }, state);
   }
+  function leaveSearchPage() {
+    for (const [wrapper] of hiddenPromotions) restorePromotion(wrapper);
+    reconcileManagedCards();
+    document.getElementById("lups-control")?.remove();
+  }
   function scan() {
+    if (!isSearchPage()) {
+      leaveSearchPage();
+      return;
+    }
     if (state.scope !== scope()) window.postMessage({ source: SOURCE, version: VERSION, type: "api-products-request" }, location.origin);
     const grid = extractGrid();
     if (!grid) {
@@ -7027,6 +7139,7 @@ if (hostname === 'www.saveonfoods.com') {
   function installSaveOnRuntime(context = {}) {
     if (!claimRuntimeInstall("saveon-content")) return false;
     lifecycle = context.lifecycle || null;
+    isSearchPage = typeof context.isSearchPage === "function" ? context.isSearchPage : () => true;
     scheduleScan = createScanScheduler(window, scan, { delayMs: 160 });
     lifecycle?.subscribe(() => schedule({ urgent: true }));
     window.addEventListener("message", ingestApiMessage);
@@ -7036,10 +7149,23 @@ if (hostname === 'www.saveonfoods.com') {
     return true;
   }
 
+  // src/retailers/saveon/routes.js
+  /*!
+   * Save-On-Foods search results use fulfillment/store-scoped `results` routes,
+   * for example `/sm/pickup/rsid/6647/results`. A non-empty `q` also preserves
+   * legacy and fixture search URLs.
+   */
+  var RESULTS_ROUTE = /^\/sm\/(?:pickup|delivery)\/rsid\/[^/]+\/results\/?$/i;
+  function isSaveOnSearchPage(url) {
+    if (!(url instanceof URL)) return false;
+    return RESULTS_ROUTE.test(url.pathname) || Boolean(url.searchParams.get("q")?.trim());
+  }
+
   // src/retailers/saveon/plugin.js
   var plugin = defineRetailerPlugin({
     id: "saveon",
     hostnames: ["www.saveonfoods.com"],
+    isSearchPage: isSaveOnSearchPage,
     getScope: () => getSaveOnScope(),
     installCapture: (global) => installSaveOnCapture(global),
     installRuntime: (_global, context) => installSaveOnRuntime(context)

@@ -49,6 +49,8 @@ const metadata = `// ==UserScript==
 // @name        ${pkg.userscript.name}
 // @version     ${pkg.version}
 // @description ${pkg.userscript.description}
+// @downloadURL https://github.com/nabekhan/grocery-price-per-unit/releases/latest/download/Grocery-Price-Per-Unit.user.js
+// @updateURL   https://github.com/nabekhan/grocery-price-per-unit/releases/latest/download/Grocery-Price-Per-Unit.user.js
 // @match       https://www.realcanadiansuperstore.ca/*
 // @match       https://www.nofrills.ca/*
 // @match       https://www.walmart.ca/*

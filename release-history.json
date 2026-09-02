@@ -20,6 +20,9 @@
     },
     "2.0.13": {
       "userscriptSha256": "83038e5dbd101594f58c9ba13ec6391055aca3a4bda1272fbb4200d9c5bf0f85"
+    },
+    "2.0.14": {
+      "userscriptSha256": "fab2483e7fa70f223f8dd48be4682938f537a2e8445b424c38d19cfef0c841ba"
     }
   }
 }

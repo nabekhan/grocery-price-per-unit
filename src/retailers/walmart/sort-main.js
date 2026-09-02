@@ -19,6 +19,7 @@ const managedWrappers = new Set();
 let lifecycle = null;
 let scheduleScan = null;
 let observer = null;
+let isSearchPage = () => true;
 
 function userscriptStorage() {
   return globalThis[Symbol.for('grocery-price-per-unit.storage.v1')]?.storage;
@@ -171,6 +172,11 @@ function ensureControl() {
 
 function scan() {
   for (const [wrapper] of hiddenBySorter) restoreWrapperDisplay(wrapper);
+  if (!isSearchPage()) {
+    reconcileManagedWrappers();
+    document.getElementById('lups-control')?.remove();
+    return;
+  }
   const apiScan = readApiScanState();
   const found = findGrid(apiScan);
   if (!found) {
@@ -292,6 +298,7 @@ async function start() {
 export function installWalmartSorter(context = {}) {
   if (!claimRuntimeInstall('walmart-sort')) return false;
   lifecycle = context.lifecycle || null;
+  isSearchPage = typeof context.isSearchPage === 'function' ? context.isSearchPage : () => true;
   scheduleScan = createScanScheduler(window, scan, { delayMs: 150 });
   lifecycle?.subscribe(() => schedule({ urgent: true }));
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start, { once: true });

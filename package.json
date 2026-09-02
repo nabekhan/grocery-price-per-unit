@@ -1,6 +1,6 @@
 {
   "name": "grocery-price-per-unit",
-  "version": "2.0.13",
+  "version": "2.0.14",
   "description": "A documented Safari userscript for comparable grocery unit prices across four Canadian storefronts.",
   "private": true,
   "license": "GPL-3.0-only",
@@ -24,7 +24,7 @@
     "test:live:matrix": "LIVE_SITE=1 playwright test tests/e2e/live-matrix.spec.js --project=webkit --workers=1",
     "test:live:hardware": "LIVE_SITE=1 playwright test tests/e2e/live-hardware.spec.js --project=webkit --workers=1",
     "test:live:inspect": "LIVE_SITE=1 node scripts/inspect-live.mjs",
-    "check": "npm run lint && npm test && npm run test:e2e",
+    "check": "npm run build && npm run lint && npm test && npm run test:e2e",
     "candidate:audit": "npm run userscript:candidate:audit"
   },
   "devDependencies": {

@@ -31,7 +31,7 @@ const INITIAL_API_PRODUCTS = Object.fromEntries(INITIAL_TILES.map((product) => [
   weighted: product.pricingUnits?.weighted ?? null
 }]));
 const responseFor = (tiles, query = null) => ({ ...(query ? { searchTermSubmitted: query } : {}), layout: { sections: { mainContentCollection: { components: [{ data: { productTiles: tiles } }] } } } });
-const openFixture = async (page, query = '', origin = 'https://www.realcanadiansuperstore.ca') => {
+const openFixture = async (page, query = '?search-bar=milk', origin = 'https://www.realcanadiansuperstore.ca') => {
   await page.route(`${origin}/test-fixture*`, (route) => route.fulfill({ body: fixtureHtml, contentType: 'text/html' }));
   await page.goto(`${origin}/test-fixture${query}`);
 };

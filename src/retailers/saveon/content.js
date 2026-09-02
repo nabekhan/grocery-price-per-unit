@@ -43,6 +43,7 @@ let scopeWatcher = null;
 let observer = null;
 let lifecycle = null;
 let scheduleScan = null;
+let isSearchPage = () => true;
 
 function messageScope(context) {
     const rawQuery = context?.query;
@@ -274,7 +275,17 @@ function ensureControl() {
   }, state);
 }
 
+function leaveSearchPage() {
+  for (const [wrapper] of hiddenPromotions) restorePromotion(wrapper);
+  reconcileManagedCards();
+  document.getElementById('lups-control')?.remove();
+}
+
 function scan() {
+  if (!isSearchPage()) {
+    leaveSearchPage();
+    return;
+  }
   if (state.scope !== scope()) window.postMessage({ source: SOURCE, version: VERSION, type: 'api-products-request' }, location.origin);
   const grid = extractGrid();
   if (!grid) {
@@ -395,6 +406,7 @@ async function start() {
 export function installSaveOnRuntime(context = {}) {
   if (!claimRuntimeInstall('saveon-content')) return false;
   lifecycle = context.lifecycle || null;
+  isSearchPage = typeof context.isSearchPage === 'function' ? context.isSearchPage : () => true;
   scheduleScan = createScanScheduler(window, scan, { delayMs: 160 });
   lifecycle?.subscribe(() => schedule({ urgent: true }));
   window.addEventListener('message', ingestApiMessage);

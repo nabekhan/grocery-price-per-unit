@@ -13,18 +13,20 @@ import { createRetailerLifecycle } from './retailer-lifecycle.js';
 const ID_PATTERN = /^[a-z][a-z0-9-]{0,63}$/;
 const HOST_PATTERN = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/;
 
-export function defineRetailerPlugin({ id, hostnames, getScope, installCapture, installRuntime }) {
+export function defineRetailerPlugin({ id, hostnames, isSearchPage, getScope, installCapture, installRuntime }) {
   if (!ID_PATTERN.test(id || '')) throw new TypeError('Retailer plugin id must be a stable lowercase identifier');
   if (!Array.isArray(hostnames) || !hostnames.length || hostnames.some((host) => !HOST_PATTERN.test(host))) {
     throw new TypeError(`Retailer plugin ${id} must declare exact hostnames`);
   }
   if (new Set(hostnames).size !== hostnames.length) throw new TypeError(`Retailer plugin ${id} repeats a hostname`);
-  if (typeof getScope !== 'function' || typeof installCapture !== 'function' || typeof installRuntime !== 'function') {
-    throw new TypeError(`Retailer plugin ${id} must implement scope, capture, and runtime contracts`);
+  if (typeof isSearchPage !== 'function' || typeof getScope !== 'function'
+    || typeof installCapture !== 'function' || typeof installRuntime !== 'function') {
+    throw new TypeError(`Retailer plugin ${id} must implement search-page, scope, capture, and runtime contracts`);
   }
   return Object.freeze({
     id,
     hostnames: Object.freeze([...hostnames]),
+    isSearchPage,
     getScope,
     installCapture,
     installRuntime
@@ -38,6 +40,11 @@ export function installRetailerPlugin(plugin, global = globalThis) {
     id: plugin.id,
     hostname,
     installedAtDocumentStart: global.document?.readyState === 'loading',
+    // Page eligibility is deliberately retailer-owned. The shared host/runtime
+    // can suspend work consistently without learning any retailer URL shape.
+    isSearchPage: () => {
+      try { return plugin.isSearchPage(new URL(global.location?.href)); } catch { return false; }
+    },
     lifecycle: createRetailerLifecycle({
       global,
       id: plugin.id,

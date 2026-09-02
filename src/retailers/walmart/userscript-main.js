@@ -7,10 +7,12 @@ import { defineRetailerPlugin, installRetailerPlugin } from '../../runtime/retai
 import { installWalmartCapture } from './api-capture-main.js';
 import { getWalmartScope, installWalmartAnnotator } from './content.js';
 import { installWalmartSorter } from './sort-main.js';
+import { isWalmartSearchPage } from './routes.js';
 
 const plugin = defineRetailerPlugin({
   id: 'walmart',
   hostnames: ['www.walmart.ca'],
+  isSearchPage: isWalmartSearchPage,
   getScope: () => getWalmartScope(),
   installCapture: (global) => installWalmartCapture(global),
   installRuntime: (_global, context) => {

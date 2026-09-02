@@ -1521,9 +1521,77 @@ test('a user reload recovers a late Superstore install from current bootstrap da
   await expect(page.locator('#lups-reload')).toBeHidden();
 });
 
+const nonSearchRouteFixtures = [
+  {
+    name: 'Superstore category',
+    url: 'https://www.realcanadiansuperstore.ca/en/food/dairy-eggs',
+    body: `<!doctype html><div id="grid">
+      <article><h3 data-testid="product-title">Milk</h3></article>
+      <article><h3 data-testid="product-title">Eggs</h3></article>
+      <article><h3 data-testid="product-title">Butter</h3></article>
+    </div>`
+  },
+  {
+    name: 'Walmart category',
+    url: 'https://www.walmart.ca/en/grocery',
+    body: `<!doctype html><div id="grid" style="display:flex">
+      <div><article data-item-id="milk"></article></div>
+      <div><article data-item-id="eggs"></article></div>
+    </div>`
+  },
+  {
+    name: 'Save-On category',
+    url: 'https://www.saveonfoods.com/sm/pickup/rsid/6647/categories/dairy',
+    body: `<!doctype html><ul id="grid">
+      <li><article data-testid="ProductCardWrapper-milk"></article></li>
+      <li><article data-testid="ProductCardWrapper-eggs"></article></li>
+    </ul>`
+  }
+];
+
+for (const fixturePage of nonSearchRouteFixtures) {
+  test(`${fixturePage.name} leaves the price sorter dormant`, async ({ page }) => {
+    await page.route(fixturePage.url, (route) => route.fulfill({
+      body: fixturePage.body,
+      contentType: 'text/html'
+    }));
+    await page.goto(fixturePage.url);
+    await page.addScriptTag({ content: userscript });
+    await page.waitForTimeout(300);
+
+    await expect(page.locator('#lups-control')).toHaveCount(0);
+    await expect(page.locator('[data-lups-annotation]')).toHaveCount(0);
+  });
+}
+
+test('leaving a Walmart search route restores owned UI, order, and promotions', async ({ page }) => {
+  await page.route('https://www.walmart.ca/route-gate-fixture*', (route) => route.fulfill({
+    body: `<!doctype html><style>#grid{display:flex}.wrapper,.card{width:120px;height:80px}</style>
+      <div id="grid">
+        <div class="wrapper"><article class="card" data-item-id="high"></article></div>
+        <div class="wrapper"><article class="card" data-item-id="low"></article></div>
+        <div data-testid="tile-take-over" data-name="promotion">Promotion</div>
+      </div>`,
+    contentType: 'text/html'
+  }));
+  await page.goto('https://www.walmart.ca/route-gate-fixture?q=milk');
+  await page.addScriptTag({ content: userscript });
+
+  await expect(page.locator('#lups-control')).toHaveCount(1);
+  await expect(page.locator('[data-name="promotion"]')).toHaveCSS('display', 'none');
+  await page.evaluate(() => history.pushState({}, '', '/en/grocery'));
+
+  await expect(page.locator('#lups-control')).toHaveCount(0);
+  await expect(page.locator('[data-name="promotion"]')).not.toHaveCSS('display', 'none');
+  expect(await page.locator('#grid > .wrapper').evaluateAll((wrappers) =>
+    wrappers.every((wrapper) => !wrapper.style.order))).toBe(true);
+});
+
 test('userscript metadata keeps capture and UI in the page world', async () => {
   expect(userscript).toContain('// @inject-into page');
   expect(userscript).toContain('// @grant       none');
   expect(userscript).not.toContain('// @inject-into content');
   expect(userscript).not.toMatch(/\/\/ @grant\s+GM\./);
+  expect(userscript).toContain('// @downloadURL https://github.com/nabekhan/grocery-price-per-unit/releases/latest/download/Grocery-Price-Per-Unit.user.js');
+  expect(userscript).toContain('// @updateURL   https://github.com/nabekhan/grocery-price-per-unit/releases/latest/download/Grocery-Price-Per-Unit.user.js');
 });

@@ -103,6 +103,7 @@ let apiProductRevision = 0;
 let apiProductScope = null;
 let apiMessageGeneration = 0;
 let lifecycle = null;
+let isSearchPage = () => true;
 
 function reportApiStatus(level, message, details) {
     try {
@@ -903,8 +904,31 @@ function ownedMutation(mutation) {
     return changedNodes.length > 0 && changedNodes.every(ownedNode);
 }
 
+function leaveSearchPage() {
+    let exposedStateChanged = false;
+    const managedIterator = setValues(managedProductContainers);
+    for (let step = setIteratorNext(managedIterator); !step.done; step = setIteratorNext(managedIterator)) {
+        const container = step.value;
+        const previousState = ownedStateSignature(container);
+        clearSortModel(container);
+        delete container.dataset.ppuTotalPrice;
+        delete container.dataset.ppuDataSource;
+        delete container.dataset.ppuProcessingError;
+        weakMapDelete(processedSignatures, container);
+        weakMapDelete(processedStates, container);
+        setDelete(managedProductContainers, container);
+        exposedStateChanged ||= previousState !== ownedStateSignature(container);
+    }
+    const publication = publishApiScanState({ accepted: false, renderedCards: 0, apiCards: 0 }, []);
+    if (exposedStateChanged || publication.changed) window.dispatchEvent(new CustomEvent('ppu-products-updated'));
+}
+
 // Select all product containers (adjust selector as needed)
 function processProducts(isForced = false, apiReport = null) {
+        if (!isSearchPage()) {
+            leaveSearchPage();
+            return;
+        }
         const productContainers = document.querySelectorAll('[data-item-id]');
         let exposedStateChanged = false;
         if (productContainers.length > MAX_RENDERED_CARDS) {
@@ -1127,6 +1151,7 @@ function startProductProcessing() {
 export function installWalmartAnnotator(context = {}) {
     if (!claimRuntimeInstall('walmart-content')) return false;
     lifecycle = context.lifecycle || null;
+    isSearchPage = typeof context.isSearchPage === 'function' ? context.isSearchPage : () => true;
     productScanScheduler = createScanScheduler(window, runProductScan, { delayMs: 150 });
     window.addEventListener('message', ingestApiProductsMessage);
     reportApiStatus('info', 'page-world bridge ready; requesting captured product snapshot');

@@ -23,6 +23,7 @@ let observedScope = currentScope();
 let scopeWatcher = null;
 let lifecycle = null;
 let scheduleScan = null;
+let isSearchPage = () => true;
 const debug = false;
 const log = (...args) => { if (debug) console.info('[Grocery Price Per Unit: Loblaw]', ...args); };
 
@@ -305,7 +306,18 @@ function restore(models, control, excluded = 0) {
   updateStatus(control, { total: models.length, excluded, restored: true });
 }
 
+function leaveSearchPage() {
+  for (const [card] of hiddenPromotions) restorePromotion(card);
+  reconcileManagedCards();
+  restoreOrdering();
+  document.getElementById('lups-control')?.remove();
+}
+
 function scan() {
+  if (!isSearchPage()) {
+    leaveSearchPage();
+    return;
+  }
   restoreStalePromotions();
   const scope = currentScope();
   if (apiScope !== scope) {
@@ -409,6 +421,7 @@ async function start() {
 export function installLoblawRuntime(context = {}) {
   if (!claimRuntimeInstall('loblaw-content')) return false;
   lifecycle = context.lifecycle || null;
+  isSearchPage = typeof context.isSearchPage === 'function' ? context.isSearchPage : () => true;
   scheduleScan = createScanScheduler(window, scan, { delayMs: 180 });
   lifecycle?.subscribe(() => schedule({ urgent: true }));
   window.addEventListener('message', ingestApiMessage);
