@@ -249,14 +249,25 @@ function schedule(options) {
 
 function sorterNode(node) {
   const element = node?.nodeType === Node.ELEMENT_NODE ? node : node?.parentElement;
-  return Boolean(element?.matches?.('#lups-control, .price-per-unit-info, .ppu-walmart-icon, [data-lups-annotation]') ||
-    element?.closest?.('#lups-control, .price-per-unit-info, .ppu-walmart-icon, [data-lups-annotation]'));
+  return Boolean(element?.matches?.('#lups-control, #gppu-shopping-assistant, .price-per-unit-info, .ppu-walmart-icon, [data-lups-annotation]') ||
+    element?.closest?.('#lups-control, #gppu-shopping-assistant, .price-per-unit-info, .ppu-walmart-icon, [data-lups-annotation]'));
+}
+
+function productIdentityNode(node) {
+  const element = node?.nodeType === Node.ELEMENT_NODE ? node : node?.parentElement;
+  return Boolean(element?.matches?.('[data-item-id]') || element?.querySelector?.('[data-item-id]'));
 }
 
 function sorterMutation(record) {
   if (sorterNode(record.target)) return true;
+  // The annotator observes the same product identity changes and publishes one
+  // trusted `ppu-products-updated` event after its card model is ready. Let that
+  // event drive sorting so a lazy card does not trigger an early, stale scan and
+  // a second post-annotation scan. Non-product additions (including ads) still
+  // schedule the sorter directly.
+  if (record.type === 'attributes' && record.attributeName === 'data-item-id') return true;
   const changedNodes = [...record.addedNodes, ...record.removedNodes];
-  return changedNodes.length > 0 && changedNodes.every(sorterNode);
+  return changedNodes.length > 0 && changedNodes.every((node) => sorterNode(node) || productIdentityNode(node));
 }
 
 async function loadDefaultMode(storage) {

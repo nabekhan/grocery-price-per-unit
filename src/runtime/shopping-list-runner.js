@@ -97,7 +97,9 @@ function normalizedRun(value, retailerId) {
     retailerId,
     phase: value.phase,
     resumePhase: ['planning', 'adding', 'reviewing'].includes(value.resumePhase) ? value.resumePhase : null,
-    mode: value.mode === 'total' ? 'total' : 'unit',
+    // Cart runs always follow the project's unit-price-first contract. The
+    // field remains serialized for forward compatibility, not as a UI choice.
+    mode: 'unit',
     currentIndex: Number.isSafeInteger(value.currentIndex)
       ? Math.max(0, Math.min(value.currentIndex, items.length))
       : 0,
@@ -116,23 +118,28 @@ function unitSuffix(dimension) {
   return { mass: '/kg', volume: '/L', count: '/each' }[dimension] || '';
 }
 
-function injectShoppingStyles() {
-  if (document.getElementById('gppu-shopping-styles')) return;
-  const style = document.createElement('style');
-  style.id = 'gppu-shopping-styles';
-  style.textContent = `
+let adoptedShoppingStyleSheet = null;
+const shoppingStyleText = `
     #gppu-shopping-assistant{position:fixed!important;z-index:2147483645!important;right:max(18px,env(safe-area-inset-right))!important;bottom:calc(max(18px,env(safe-area-inset-bottom)) + 64px)!important;font:14px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif!important;color:#273244!important}
-    #gppu-shopping-toggle{box-sizing:border-box!important;display:grid!important;width:50px!important;height:50px!important;margin-left:auto!important;place-items:center!important;border:1px solid #1e293b!important;border-radius:999px!important;background:#fff!important;color:#27364a!important;box-shadow:0 9px 24px #0f172a2e,0 2px 6px #0f172a20!important;font-size:22px!important}
+    #gppu-shopping-assistant[data-gppu-standalone="true"]{bottom:max(18px,env(safe-area-inset-bottom))!important}
+    #gppu-shopping-toggle{box-sizing:border-box!important;display:grid!important;width:50px!important;height:50px!important;margin-left:auto!important;place-items:center!important;border:0!important;border-radius:999px!important;background:#fffffff5!important;color:#334155!important;box-shadow:0 5px 16px #0f172a1f,0 1px 3px #0f172a1a!important;font-size:22px!important}
     #gppu-shopping-toggle:hover{background:#f8fafc!important;transform:translateY(-1px)!important}
+    #gppu-shopping-toggle[hidden]{display:none!important}
     #gppu-shopping-toggle svg{width:25px!important;height:25px!important}
+    #lups-control .lups-trigger-row:has(>#gppu-shopping-toggle[data-gppu-quick-action="true"]){position:relative!important}
+    #lups-control .lups-trigger-row:has(>#gppu-shopping-toggle[data-gppu-quick-action="true"])::before{position:absolute!important;right:100%!important;bottom:0!important;width:58px!important;height:50px!important;content:""!important}
+    #lups-control .lups-trigger-row:has(>#lups-flip-direction:not([hidden])):has(>#gppu-shopping-toggle[data-gppu-quick-action="true"])::before{width:116px!important}
+    #lups-control #gppu-shopping-toggle[data-gppu-quick-action="true"]{position:absolute!important;z-index:2!important;right:calc(100% + 8px)!important;bottom:0!important;margin:0!important;opacity:0!important;visibility:hidden!important;pointer-events:none!important;transform:translateX(10px) scale(.92)!important;transition:opacity .12s ease,transform .12s ease,visibility .12s ease,box-shadow .16s ease,background .16s ease!important}
+    #lups-control .lups-trigger-row:has(>#lups-flip-direction:not([hidden]))>#gppu-shopping-toggle[data-gppu-quick-action="true"]{right:calc(100% + 66px)!important}
+    #lups-control[data-lups-menu-open="false"] .lups-trigger-row:hover>#gppu-shopping-toggle[data-gppu-quick-action="true"],#lups-control[data-lups-menu-open="false"] .lups-trigger-row:focus-within>#gppu-shopping-toggle[data-gppu-quick-action="true"]{opacity:1!important;visibility:visible!important;pointer-events:auto!important;transform:none!important}
     #gppu-shopping-panel{box-sizing:border-box!important;width:min(390px,calc(100vw - 24px))!important;max-height:min(72vh,620px)!important;margin-bottom:10px!important;padding:16px!important;overflow:auto!important;border:1px solid #d7dee8!important;border-radius:18px!important;background:#fffffff8!important;box-shadow:0 18px 50px #0f172a35!important;backdrop-filter:blur(12px)!important}
     #gppu-shopping-panel[hidden]{display:none!important}
+    .gppu-shopping-heading{display:flex!important;align-items:center!important;justify-content:space-between!important;gap:12px!important}
     #gppu-shopping-panel h2{margin:0!important;font-size:18px!important;letter-spacing:-.02em!important}
-    #gppu-shopping-panel p{margin:6px 0 12px!important;color:#5b6777!important}
+    #gppu-shopping-close{display:grid!important;width:36px!important;height:36px!important;padding:0!important;place-items:center!important;border:1px solid #d7dee8!important;border-radius:999px!important;background:#fff!important;color:#526071!important;font:500 22px/1 sans-serif!important}
     #gppu-shopping-panel label{display:block!important;margin:10px 0 5px!important;font-weight:700!important}
-    #gppu-shopping-input,#gppu-shopping-mode{box-sizing:border-box!important;width:100%!important;border:1px solid #cbd5e1!important;border-radius:10px!important;background:#fff!important;color:#1f2937!important;font:inherit!important}
+    #gppu-shopping-input{box-sizing:border-box!important;width:100%!important;border:1px solid #cbd5e1!important;border-radius:10px!important;background:#fff!important;color:#1f2937!important;font:inherit!important}
     #gppu-shopping-input{min-height:78px!important;padding:9px 10px!important;resize:vertical!important}
-    #gppu-shopping-mode{height:42px!important;padding:0 9px!important}
     .gppu-shopping-actions{display:flex!important;flex-wrap:wrap!important;gap:8px!important;margin-top:12px!important}
     .gppu-shopping-actions button{min-height:42px!important;padding:0 13px!important;border:1px solid #27364a!important;border-radius:999px!important;background:#27364a!important;color:#fff!important;font:700 13px/1 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif!important}
     .gppu-shopping-actions button[data-secondary="true"]{border-color:#cbd5e1!important;background:#fff!important;color:#334155!important}
@@ -142,9 +149,33 @@ function injectShoppingStyles() {
     #gppu-shopping-results strong{display:block!important;color:#263244!important}
     #gppu-shopping-results small{display:block!important;margin-top:2px!important;color:#64748b!important}
     #gppu-shopping-assistant :focus-visible{outline:3px solid #6476b8!important;outline-offset:2px!important}
-    @media(max-width:640px){#gppu-shopping-assistant{right:max(10px,env(safe-area-inset-right))!important;bottom:calc(max(14px,env(safe-area-inset-bottom)) + 62px)!important}#gppu-shopping-panel{width:calc(100vw - 20px)!important}}
+    @media(max-width:640px){#gppu-shopping-assistant{right:max(10px,env(safe-area-inset-right))!important;bottom:calc(max(14px,env(safe-area-inset-bottom)) + 62px)!important}#gppu-shopping-assistant[data-gppu-standalone="true"]{bottom:max(14px,env(safe-area-inset-bottom))!important}#gppu-shopping-panel{width:calc(100vw - 20px)!important}}
+    @media(forced-colors:active){#gppu-shopping-toggle{border:2px solid CanvasText!important;background:Canvas!important;color:CanvasText!important;box-shadow:none!important}#gppu-shopping-assistant :focus-visible{outline-color:Highlight!important}}
     @media(prefers-reduced-motion:reduce){#gppu-shopping-toggle{transition:none!important}}
   `;
+
+function injectShoppingStyles() {
+  // Constructed stylesheets are the primary Safari path: unlike an injected
+  // <style>, they remain usable when a retailer declares style-src 'none'. The
+  // element fallback is reserved for older engines without CSSStyleSheet.
+  if (typeof CSSStyleSheet === 'function' && 'adoptedStyleSheets' in document) {
+    try {
+      if (!adoptedShoppingStyleSheet) {
+        adoptedShoppingStyleSheet = new CSSStyleSheet();
+        adoptedShoppingStyleSheet.replaceSync(shoppingStyleText);
+      }
+      if (!document.adoptedStyleSheets.includes(adoptedShoppingStyleSheet)) {
+        document.adoptedStyleSheets = [...document.adoptedStyleSheets, adoptedShoppingStyleSheet];
+      }
+      return;
+    } catch {
+      adoptedShoppingStyleSheet = null;
+    }
+  }
+  if (document.getElementById('gppu-shopping-styles')) return;
+  const style = document.createElement('style');
+  style.id = 'gppu-shopping-styles';
+  style.textContent = shoppingStyleText;
   document.head?.append(style);
 }
 
@@ -155,10 +186,50 @@ export function createShoppingListRunner({ retailerId, adapter }) {
   let root = null;
   let panel = null;
   let input = null;
-  let mode = null;
   let status = null;
   let results = null;
   let actions = null;
+  let toggle = null;
+  let launcherObserver = null;
+
+  function cartIcon() {
+    const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    icon.setAttribute('viewBox', '0 0 24 24');
+    icon.setAttribute('aria-hidden', 'true');
+    // A centered bag reads as shopping without the visual lean of a trolley,
+    // keeping this action balanced beside the menu's one-character glyphs.
+    icon.innerHTML = '<path d="M5.5 8.5h13l-1 11h-11l-1-11Z M9 8.5V6.75a3 3 0 0 1 6 0V8.5" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8"/>';
+    return icon;
+  }
+
+  function setPanelOpen(open, { focus = false } = {}) {
+    panel.hidden = !open;
+    toggle?.setAttribute('aria-expanded', String(open));
+    if (open && focus) window.setTimeout(() => input?.focus(), 0);
+  }
+
+  /*
+   * On a results page the cart launcher is a quick action that reveals itself
+   * to the left of the main sort button on pointer hover or keyboard focus.
+   * During cart review (where the sorter is intentionally absent) the same
+   * button returns to its standalone position so a run remains resumable.
+   */
+  function syncLauncherPlacement() {
+    if (!root?.isConnected) return;
+    injectShoppingStyles();
+    const triggerRow = document.querySelector('#lups-control .lups-trigger-row');
+    if (!triggerRow) {
+      if (toggle.parentElement !== root) root.append(toggle);
+      delete toggle.dataset.gppuQuickAction;
+      root.dataset.gppuStandalone = 'true';
+      toggle.hidden = false;
+      return;
+    }
+    delete root.dataset.gppuStandalone;
+    toggle.hidden = false;
+    toggle.dataset.gppuQuickAction = 'true';
+    if (toggle.parentElement !== triggerRow) triggerRow.append(toggle);
+  }
 
   async function readRun() {
     try {
@@ -205,14 +276,12 @@ export function createShoppingListRunner({ retailerId, adapter }) {
     actions.textContent = '';
     results.textContent = '';
     if (!run) {
-      status.textContent = 'Paste a comma-separated list. Previewing does not change your cart.';
-      actionButton('Preview cheapest choices', startPlanning);
+      status.textContent = 'Paste a comma-separated shopping list.';
+      actionButton('Preview items', startPlanning);
       return;
     }
     input.value = run.items.map((item) => item.query).join(', ');
-    mode.value = run.mode;
     input.disabled = true;
-    mode.disabled = true;
     status.textContent = run.message || ({
       planning: `Planning item ${Math.min(run.currentIndex + 1, run.items.length)} of ${run.items.length}`,
       'ready-to-add': 'Preview complete. Review the choices before changing your cart.',
@@ -255,7 +324,7 @@ export function createShoppingListRunner({ retailerId, adapter }) {
       retailerId,
       phase: 'planning',
       resumePhase: null,
-      mode: mode.value === 'total' ? 'total' : 'unit',
+      mode: 'unit',
       currentIndex: 0,
       items: queries.map((query) => ({
         query, status: 'pending', candidate: null, selectedBy: null,
@@ -292,7 +361,6 @@ export function createShoppingListRunner({ retailerId, adapter }) {
   async function resetRun() {
     await clearRun();
     input.disabled = false;
-    mode.disabled = false;
     input.value = '';
     render();
   }
@@ -300,7 +368,6 @@ export function createShoppingListRunner({ retailerId, adapter }) {
   async function cancelRun() {
     await clearRun();
     input.disabled = false;
-    mode.disabled = false;
     render();
   }
 
@@ -318,9 +385,14 @@ export function createShoppingListRunner({ retailerId, adapter }) {
     if (!adapter.isSearchFor(item.query)) {
       item.status = 'pending';
       run.message = `Opening ${adapter.retailerName || 'the retailer'} search for “${item.query}”`;
+      const target = adapter.searchUrl(item.query);
+      if (!target) return pause(
+        adapter.searchUnavailableReason || `Open a ${adapter.retailerName || 'retailer'} results page, then continue.`,
+        'planning'
+      );
       await saveRun();
       render();
-      adapter.navigate(adapter.searchUrl(item.query));
+      adapter.navigate(target);
       return;
     }
     item.status = 'collecting';
@@ -336,6 +408,10 @@ export function createShoppingListRunner({ retailerId, adapter }) {
     if (collection?.status === 'human-required') {
       item.status = 'pending';
       return pause(collection.reason, 'planning');
+    }
+    if (collection?.status !== 'complete' && collection?.status !== undefined) {
+      item.status = 'pending';
+      return pause(collection.reason || 'Could not confirm that every first-page result was loaded.', 'planning');
     }
     const chosen = chooseCheapestProduct(collection?.products ?? collection, run.mode);
     if (chosen) {
@@ -374,9 +450,14 @@ export function createShoppingListRunner({ retailerId, adapter }) {
     if (!adapter.isSearchFor(item.query)) {
       item.status = 'planned';
       run.message = `Returning to “${item.query}” to add the exact previewed product`;
+      const target = adapter.searchUrl(item.query);
+      if (!target) return pause(
+        adapter.searchUnavailableReason || `Open a ${adapter.retailerName || 'retailer'} results page, then continue.`,
+        'adding'
+      );
       await saveRun();
       render();
-      adapter.navigate(adapter.searchUrl(item.query));
+      adapter.navigate(target);
       return;
     }
     item.status = 'adding';
@@ -409,8 +490,13 @@ export function createShoppingListRunner({ retailerId, adapter }) {
 
   async function advanceReview() {
     if (!adapter.isCartPage()) {
+      const target = adapter.cartUrl();
+      if (!target) return pause(
+        adapter.cartUnavailableReason || `Open the ${adapter.retailerName || 'retailer'} cart, then continue.`,
+        'reviewing'
+      );
       await saveRun();
-      adapter.navigate(adapter.cartUrl());
+      adapter.navigate(target);
       return;
     }
     const added = run.items.filter((item) => item.status === 'added' && item.candidate);
@@ -464,21 +550,22 @@ export function createShoppingListRunner({ retailerId, adapter }) {
     panel.id = 'gppu-shopping-panel';
     panel.hidden = true;
     const heading = document.createElement('h2');
-    heading.textContent = 'Cheapest cart builder';
-    const intro = document.createElement('p');
-    intro.textContent = 'Preview a comma-separated list, then approve adding the exact choices.';
+    heading.textContent = 'Cart builder';
+    const panelHeader = document.createElement('div');
+    panelHeader.className = 'gppu-shopping-heading';
+    const close = document.createElement('button');
+    close.id = 'gppu-shopping-close';
+    close.type = 'button';
+    close.textContent = '×';
+    close.setAttribute('aria-label', 'Close cart builder');
+    close.addEventListener('click', () => setPanelOpen(false));
+    panelHeader.append(heading, close);
     const inputLabel = document.createElement('label');
     inputLabel.htmlFor = 'gppu-shopping-input';
     inputLabel.textContent = 'Shopping list';
     input = document.createElement('textarea');
     input.id = 'gppu-shopping-input';
     input.placeholder = 'Peanut butter, bananas, jelly, water';
-    const modeLabel = document.createElement('label');
-    modeLabel.htmlFor = 'gppu-shopping-mode';
-    modeLabel.textContent = 'Cheapest means';
-    mode = document.createElement('select');
-    mode.id = 'gppu-shopping-mode';
-    mode.append(new Option('Best comparable unit price', 'unit'), new Option('Lowest item price', 'total'));
     status = document.createElement('div');
     status.id = 'gppu-shopping-status';
     status.setAttribute('aria-live', 'polite');
@@ -486,30 +573,28 @@ export function createShoppingListRunner({ retailerId, adapter }) {
     results.id = 'gppu-shopping-results';
     actions = document.createElement('div');
     actions.className = 'gppu-shopping-actions';
-    panel.append(heading, intro, inputLabel, input, modeLabel, mode, status, results, actions);
-    const toggle = document.createElement('button');
+    panel.append(panelHeader, inputLabel, input, status, results, actions);
+    toggle = document.createElement('button');
     toggle.id = 'gppu-shopping-toggle';
     toggle.type = 'button';
-    const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-    icon.setAttribute('viewBox', '0 0 24 24');
-    icon.setAttribute('aria-hidden', 'true');
-    icon.innerHTML = '<path d="M3 4h2l2.1 10.1a2 2 0 0 0 2 1.6h7.8a2 2 0 0 0 2-1.6L20 8H6.1M9.5 20a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5Zm7 0a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5Z" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8"/>';
-    toggle.append(icon);
-    toggle.setAttribute('aria-label', 'Open cheapest cart builder');
+    toggle.append(cartIcon());
+    toggle.setAttribute('aria-label', 'Open cart builder');
     toggle.setAttribute('aria-expanded', 'false');
     toggle.addEventListener('click', () => {
-      panel.hidden = !panel.hidden;
-      toggle.setAttribute('aria-expanded', String(!panel.hidden));
+      setPanelOpen(panel.hidden, { focus: panel.hidden });
     });
     root.append(panel, toggle);
     document.body.append(root);
+    launcherObserver = new MutationObserver(syncLauncherPlacement);
+    launcherObserver.observe(document.body, { childList: true, subtree: true });
+    syncLauncherPlacement();
     run = await readRun();
     if (run) {
-      panel.hidden = false;
-      toggle.setAttribute('aria-expanded', 'true');
+      setPanelOpen(true);
     }
     render();
     if (run && ACTIVE_PHASES.has(run.phase)) window.setTimeout(() => void advance(), 350);
+    window.addEventListener('pagehide', () => launcherObserver?.disconnect(), { once: true });
   }
 
   return Object.freeze({

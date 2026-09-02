@@ -20,6 +20,7 @@ export function installLoblawCapture(global = window) {
   const MAX_PRODUCTS = 500;
   const MAX_COMPONENTS = 100;
   const MAX_INSPECTED_PRODUCT_TILES = 2_000;
+  const BOOTSTRAP_IDENTITY_GRACE_MS = 5_000;
 
   if (global[INSTALL_KEY]) return false;
   const state = {
@@ -30,7 +31,9 @@ export function installLoblawCapture(global = window) {
     revision: 0,
     requestSequence: 0,
     latestRequestScope: null,
-    latestRequestSequence: 0
+    latestRequestSequence: 0,
+    installedAt: Date.now(),
+    initialHistoryLength: Number.isSafeInteger(global.history?.length) ? global.history.length : null
   };
   global[INSTALL_KEY] = state;
 
@@ -65,6 +68,21 @@ export function installLoblawCapture(global = window) {
       ? `query:${context.query}|store:${context.storeId || ''}`
       : `page:${context.pagePath}`;
     return { ...context, pageScope, scope: `${pageScope}|filter:${filterFingerprint}` };
+  }
+
+  function payloadQuery(payload) {
+    const roots = [
+      payload,
+      payload?.initialSearchData,
+      payload?.props?.pageProps?.initialSearchData,
+      payload?.pageProps?.initialSearchData,
+      payload?.data
+    ];
+    for (const root of roots) {
+      const query = root?.searchTermSubmitted || root?.searchTerm;
+      if (normalizedQuery(query)) return query;
+    }
+    return null;
   }
 
   function productTiles(payload) {
@@ -234,7 +252,7 @@ export function installLoblawCapture(global = window) {
   function ingest(payload, requestContext = null, { authoritative = false } = {}) {
     const context = requestContext?.scope
       ? requestContext
-      : { ...pageContext(payload?.searchTermSubmitted || payload?.searchTerm), requestSequence: 0 };
+      : { ...pageContext(payloadQuery(payload)), requestSequence: 0 };
     if (!isActiveRequest(context)) return false;
     const tiles = productTiles(payload);
     const products = {};
@@ -263,6 +281,42 @@ export function installLoblawCapture(global = window) {
     state.products = Object.fromEntries(keptIds.map((id) => [id, state.products[id]]));
     state.productSequences = Object.fromEntries(keptIds.map((id) => [id, state.productSequences[id]]));
     state.context = context;
+    state.revision += 1;
+    post('snapshot');
+    return true;
+  }
+
+  function refineBootstrapStoreIdentity() {
+    const previous = state.context;
+    if (!previous || previous.requestSequence !== 0 || previous.storeId
+      || state.latestRequestSequence !== 0 || !previous.query
+      || Date.now() - state.installedAt > BOOTSTRAP_IDENTITY_GRACE_MS
+      || (state.initialHistoryLength !== null && global.history?.length !== state.initialHistoryLength)) return false;
+    let currentQuery = null;
+    try {
+      currentQuery = normalizedQuery(new URL(global.location.href).searchParams.get('search-bar'));
+    } catch { /* rejected below */ }
+    if (currentQuery !== previous.query) return false;
+    const next = { ...pageContext(currentQuery), requestSequence: 0 };
+    if (!next.storeId) return false;
+    try {
+      const previousPath = new URL(previous.pagePath, global.location.origin).pathname;
+      const currentPath = new URL(next.pagePath, global.location.origin).pathname;
+      if (previousPath !== currentPath) return false;
+    } catch {
+      return false;
+    }
+
+    /*
+     * Superstore currently renders its trusted __NEXT_DATA__ while the initial
+     * URL contains only the query, then completes the same document's identity
+     * by adding storeId with history.replaceState. Preserve that already-
+     * sanitized bootstrap only for this one-way identity completion. A changed
+     * query, path, known store, observed API request, elapsed startup grace, or
+     * pushed history entry can never be relabelled.
+     */
+    state.context = next;
+    state.scope = next.scope;
     state.revision += 1;
     post('snapshot');
     return true;
@@ -351,7 +405,8 @@ export function installLoblawCapture(global = window) {
   global.addEventListener('message', (event) => {
     if (event.source !== global || event.origin !== global.location.origin) return;
     const message = event.data;
-    if (message?.source === SOURCE && message?.version === VERSION && message?.type === REQUEST_TYPE) post();
+    if (message?.source === SOURCE && message?.version === VERSION && message?.type === REQUEST_TYPE
+      && !refineBootstrapStoreIdentity()) post();
   });
   return true;
 }

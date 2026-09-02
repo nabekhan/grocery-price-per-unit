@@ -4,6 +4,7 @@ import { annotate, clearAnnotation, createControl, injectStyles, updateStatus } 
 import { claimRuntimeInstall } from '../../runtime/install.js';
 import { areOnlyOwnedMutations } from '../../runtime/mutations.js';
 import { captureWaitState, createScanScheduler } from '../../runtime/retailer-lifecycle.js';
+import { createTrustedCardProducts } from '../../runtime/trusted-card-products.js';
 
 /*!
  * Superstore/No Frills DOM adapter. Accepted API snapshots stay scoped to the
@@ -24,6 +25,9 @@ let scopeWatcher = null;
 let lifecycle = null;
 let scheduleScan = null;
 let isSearchPage = () => true;
+const shoppingProducts = createTrustedCardProducts();
+export const readLoblawShoppingState = shoppingProducts.readState;
+export const readLoblawShoppingModel = shoppingProducts.readModel;
 const debug = false;
 const log = (...args) => { if (debug) console.info('[Grocery Price Per Unit: Loblaw]', ...args); };
 
@@ -311,6 +315,24 @@ function leaveSearchPage() {
   reconcileManagedCards();
   restoreOrdering();
   document.getElementById('lups-control')?.remove();
+  shoppingProducts.publish();
+  window.dispatchEvent(new CustomEvent('ppu-products-updated'));
+}
+
+function publishShoppingProducts(models = [], accepted = false) {
+  shoppingProducts.publish({
+    accepted,
+    entries: models.map((model) => ({
+      card: model.card,
+      matched: model.dataSource === 'api',
+      productId: model.productId,
+      name: model.name,
+      currentPrice: model.currentPrice,
+      normalizedUnitPrice: model.normalizedUnitPrice,
+      dimension: model.dimension
+    }))
+  });
+  window.dispatchEvent(new CustomEvent('ppu-products-updated'));
 }
 
 function scan() {
@@ -331,6 +353,7 @@ function scan() {
     if (control) updateStatus(control, state.restored
       ? { total: undefined, excluded: 0, restored: true }
       : { total: undefined, excluded: 0, dataState: captureWaitState(lifecycle, scope) });
+    publishShoppingProducts([], apiScope === scope);
     return;
   }
   reconcileManagedCards(grid.models);
@@ -339,6 +362,7 @@ function scan() {
   if (!control) return;
   const excludedCards = hideRecognizedPromotions(grid.models);
   const models = grid.models.filter((model) => !excludedCards.has(model.card));
+  publishShoppingProducts(models, apiScope === scope);
   for (const model of models) model.card.dataset.lupsDataSource = model.dataSource;
   for (const model of models) {
     if (model.dataSource === 'api') annotate(model);
@@ -387,7 +411,7 @@ async function start() {
   injectStyles();
   scan();
   state.observer = new MutationObserver((records) => {
-    if (areOnlyOwnedMutations(records, (record) => record.target.closest?.('#lups-control,[data-lups-annotation]'))) return;
+    if (areOnlyOwnedMutations(records, (record) => record.target.closest?.('#lups-control,[data-lups-annotation],#gppu-shopping-assistant'))) return;
     schedule();
   });
   // Loblaw replaces the entire main element during SPA navigation, so the body is

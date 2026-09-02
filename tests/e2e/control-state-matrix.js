@@ -323,12 +323,17 @@ export function expectControlStateMatrix(evidence) {
     .every((item) => item.geometry.status !== null)).toBe(true);
   const phoneActiveStates = activeStates.filter((item) => item.viewport.width <= 390
     && item.geometry.status !== null);
-  expect(phoneActiveStates.every((item) => item.geometry.status.height <= (item.viewport.width === 320 ? 79 : 63)
+  // WebKit's bundled Linux font can wrap the tooltip one fractionally taller
+  // line than macOS Safari. Keep a small cross-platform allowance while still
+  // asserting that the complete tooltip and both 44 px targets fit onscreen.
+  const invalidPhoneActiveStates = phoneActiveStates.filter((item) => !(
+    item.geometry.status.height <= (item.viewport.width === 320 ? 82 : 68)
     && item.geometry.status.x >= 0
     && item.geometry.status.x + item.geometry.status.width <= item.viewport.width + 1
     && item.geometry.status.y >= 0
     && item.geometry.status.y + item.geometry.status.height <= item.viewport.height + 1
-    && item.geometry.reverse.height >= 44)).toBe(true);
+    && item.geometry.reverse.height >= 44));
+  expect(invalidPhoneActiveStates, JSON.stringify(invalidPhoneActiveStates, null, 2)).toEqual([]);
   expect(openStates.filter((item) => item.viewport.width <= 390)
     .every((item) => !item.overflowCueVisible)).toBe(true);
 

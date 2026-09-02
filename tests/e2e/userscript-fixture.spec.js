@@ -83,6 +83,26 @@ test('single page-world userscript captures and sorts without GM privileges', as
   })).toBe(true);
 
   await choose(page, 'auto-asc');
+  await page.locator('#lups-menu-button').hover();
+  await expect(page.locator('#lups-flip-direction')).toBeVisible();
+  await expect(page.locator('#gppu-shopping-toggle')).toBeVisible();
+  await page.waitForFunction(() => document.getAnimations()
+    .every((animation) => animation.playState !== 'running'));
+  const [cartBubble, directionBubble, sortBubble] = await Promise.all([
+    page.locator('#gppu-shopping-toggle').boundingBox(),
+    page.locator('#lups-flip-direction').boundingBox(),
+    page.locator('#lups-menu-button').boundingBox()
+  ]);
+  expect(cartBubble.x + cartBubble.width).toBeLessThanOrEqual(directionBubble.x - 7);
+  expect(directionBubble.x + directionBubble.width).toBeLessThanOrEqual(sortBubble.x - 7);
+  await expect(page.locator('#gppu-shopping-toggle')).toHaveCSS('border-top-width', '0px');
+  await expect(page.locator('#lups-flip-direction')).toHaveCSS('border-top-width', '0px');
+  const quickActionStyles = await page.locator('#gppu-shopping-toggle').evaluate((cart) => {
+    const properties = ['backgroundColor', 'color', 'boxShadow', 'borderRadius', 'transitionProperty', 'transitionDuration'];
+    const values = (element) => Object.fromEntries(properties.map((property) => [property, getComputedStyle(element)[property]]));
+    return { cart: values(cart), direction: values(document.querySelector('#lups-flip-direction')) };
+  });
+  expect(quickActionStyles.cart).toEqual(quickActionStyles.direction);
   await expect(page.locator('#lups-status')).toContainText('3 comparable');
   await expect(page.locator('#lups-status')).not.toContainText('Automatic chose');
   await expect(page.locator('#lups-live-status')).toContainText('Automatic chose $/kg · Low → high · 3 comparable');
@@ -116,6 +136,8 @@ test('single page-world userscript captures and sorts without GM privileges', as
   await expect(page.locator('#lups-live-status')).toContainText('Website order · 8 loaded products');
   await page.locator('#lups-menu-button').hover();
   await expect(page.locator('#lups-status-row')).toBeVisible();
+  await expect(page.locator('#gppu-shopping-toggle')).toBeVisible();
+  await expect(page.locator('[data-gppu-shopping-action]')).toHaveCount(0);
   await expect(page.locator('#lups-restore')).toHaveCount(0);
   await expect.poll(() => page.evaluate(() => localStorage.getItem(
     '__gppu_userscript_storage__:sync:defaultSortMode'
@@ -123,11 +145,32 @@ test('single page-world userscript captures and sorts without GM privileges', as
   await page.locator('#lups-menu-button').focus();
   await page.keyboard.press('Space');
   await expect(page.locator('#lups-menu-button')).toHaveAttribute('aria-expanded', 'true');
+  await expect(page.locator('#gppu-shopping-toggle')).toBeHidden();
   await expect(page.getByRole('menuitemradio', { name: 'Website order, Keep the retailer’s current order' })).toBeFocused();
   await expect(page.locator('[role="menuitemradio"][aria-checked="true"]')).toHaveCount(1);
   await page.keyboard.press('Escape');
   await expect(page.locator('#lups-menu-button')).toHaveAttribute('aria-expanded', 'false');
   await expect(page.locator('#lups-menu-button')).toBeFocused();
+  expect(pageErrors).toEqual([]);
+});
+
+test('Superstore keeps its bootstrap when the same document appends storeId', async ({ page }) => {
+  const pageErrors = [];
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+  await page.addInitScript({ content: userscript });
+  await page.route('https://www.realcanadiansuperstore.ca/bootstrap-store-refinement-fixture*', (route) => route.fulfill({
+    contentType: 'text/html',
+    body: fixtureWithData.replace('</body>', `<script>
+      setTimeout(() => history.replaceState({}, '',
+        '/bootstrap-store-refinement-fixture?search-bar=milk&storeId=3730'), 0);
+    </script></body>`)
+  }));
+
+  await page.goto('https://www.realcanadiansuperstore.ca/bootstrap-store-refinement-fixture?search-bar=milk');
+  await expect(page).toHaveURL(/storeId=3730/);
+  await expect(page.locator('[data-fixture-id="volume-explicit"]')).toHaveAttribute('data-lups-data-source', 'api');
+  await expect(page.locator('[data-fixture-id="volume-explicit"] [data-lups-annotation]')).toHaveText('$1.60/L');
+  await expect(page.locator('#lups-status')).not.toContainText('Waiting for current-page product data');
   expect(pageErrors).toEqual([]);
 });
 
@@ -505,7 +548,7 @@ test('Walmart userscript starts at document-start and carries captured API data 
   expect(pageErrors).toEqual([]);
 });
 
-test('Walmart cart builder previews, explicitly adds, resumes, and verifies the exact cheapest product', async ({ page }) => {
+test('Walmart cart builder previews, explicitly adds, resumes, and verifies the selected product', async ({ page }) => {
   const pageErrors = [];
   page.on('pageerror', (error) => pageErrors.push(error.message));
   await page.addInitScript({ content: userscript });
@@ -513,31 +556,64 @@ test('Walmart cart builder previews, explicitly adds, resumes, and verifies the 
     contentType: 'application/json',
     body: JSON.stringify({ data: { search: { itemStacks: [{ itemsV2: [
       { id: 'expensive-bananas', name: 'Large bananas 1 kg', priceInfo: { currentPrice: { price: 4 } } },
-      { id: 'cheap-bananas', name: 'Value bananas 1 kg', priceInfo: { currentPrice: { price: 2 } } }
+      { id: 'cheap-bananas', name: 'Value bananas 1 kg', priceInfo: { currentPrice: { price: 2 } } },
+      { id: 'lazy-bananas', name: 'First-page bananas 1 kg', priceInfo: { currentPrice: { price: 1 } } }
     ] }] } } })
   }));
   await page.route('https://www.walmart.ca/shopping-list-fixture/**', (route) => route.fulfill({
     contentType: 'text/html',
-    body: `<!doctype html><style>#grid{display:flex}.wrapper,.card{width:180px;min-height:110px}</style>
+    body: `<!doctype html><style>#grid{display:flex;min-height:1500px;align-items:flex-start}.wrapper,.card{width:180px;min-height:110px}</style>
       <div id="grid">
         <div class="wrapper"><article class="card" data-item-id="expensive-bananas"><button>Add large bananas</button></article></div>
         <div class="wrapper"><article class="card" data-item-id="cheap-bananas"><button onclick="this.textContent='Added';this.setAttribute('aria-label','Quantity increase')">Add value bananas</button></article></div>
-      </div><script>fetch('/orchestra/snb/graphql/search?variables=' + encodeURIComponent(JSON.stringify({query:'bananas',page:1})))</script>`
+      </div><script>
+        fetch('/orchestra/snb/graphql/search?variables=' + encodeURIComponent(JSON.stringify({query:'bananas',page:1})));
+        addEventListener('scroll', () => {
+          if (scrollY < 1 || document.querySelector('[data-item-id="lazy-bananas"]')) return;
+          const wrapper = document.createElement('div');
+          wrapper.className = 'wrapper';
+          const article = document.createElement('article');
+          article.className = 'card';
+          article.dataset.itemId = 'lazy-bananas';
+          const button = document.createElement('button');
+          button.textContent = 'Add first-page bananas';
+          button.addEventListener('click', () => {
+            button.textContent = 'Added';
+            button.setAttribute('aria-label', 'Quantity increase');
+          });
+          article.append(button);
+          wrapper.append(article);
+          document.querySelector('#grid').append(wrapper);
+          window.__gppuLazyProductLoaded = true;
+        });
+      </script>`
   }));
   await page.route('https://www.walmart.ca/en/cart', (route) => route.fulfill({
     contentType: 'text/html',
-    body: '<!doctype html><main data-testid="cart-item"><a href="/en/ip/value-bananas/cheap-bananas">Value bananas</a></main>'
+    body: '<!doctype html><main data-testid="cart-item"><a href="/en/ip/first-page-bananas/lazy-bananas">First-page bananas</a></main>'
   }));
 
   await page.goto('https://www.walmart.ca/shopping-list-fixture/search?q=bananas');
+  await page.locator('#lups-menu-button').hover();
+  await expect(page.locator('#gppu-shopping-toggle')).toBeVisible();
+  await page.waitForFunction(() => document.getAnimations()
+    .every((animation) => animation.playState !== 'running'));
+  const quickActionBox = await page.locator('#gppu-shopping-toggle').boundingBox();
+  const mainActionBox = await page.locator('#lups-menu-button').boundingBox();
+  expect(quickActionBox.x + quickActionBox.width).toBeLessThanOrEqual(mainActionBox.x - 7);
+  await fs.mkdir(path.join(root, 'artifacts/screenshots/shopping-list'), { recursive: true });
+  await page.screenshot({
+    path: path.join(root, 'artifacts/screenshots/shopping-list/walmart-quick-action.png'),
+    fullPage: false
+  });
   await page.locator('#gppu-shopping-toggle').click();
   await page.locator('#gppu-shopping-input').fill('bananas');
-  await page.getByRole('button', { name: 'Preview cheapest choices' }).click();
+  await page.getByRole('button', { name: 'Preview items' }).click();
 
   await expect(page.locator('#gppu-shopping-status')).toContainText('Preview complete', { timeout: 8_000 });
-  await expect(page.locator('#gppu-shopping-results')).toContainText('Value bananas 1 kg · $2.00');
+  expect(await page.evaluate(() => window.__gppuLazyProductLoaded)).toBe(true);
+  await expect(page.locator('#gppu-shopping-results')).toContainText('First-page bananas 1 kg · $1.00');
   await expect(page.locator('[aria-label="Quantity increase"]')).toHaveCount(0);
-  await fs.mkdir(path.join(root, 'artifacts/screenshots/shopping-list'), { recursive: true });
   await page.screenshot({
     path: path.join(root, 'artifacts/screenshots/shopping-list/walmart-preview.png'),
     fullPage: false
@@ -547,7 +623,96 @@ test('Walmart cart builder previews, explicitly adds, resumes, and verifies the 
   await expect(page).toHaveURL('https://www.walmart.ca/en/cart');
   await expect(page.locator('#gppu-shopping-status')).toContainText('All planned Add actions completed', { timeout: 8_000 });
   await expect(page.locator('#gppu-shopping-results')).toContainText('bananas — added');
-  await expect(page.locator('a[href*="cheap-bananas"]')).toHaveCount(1);
+  await expect(page.locator('a[href*="lazy-bananas"]')).toHaveCount(1);
+  expect(pageErrors).toEqual([]);
+});
+
+for (const storefront of [
+  { name: 'Superstore', host: 'www.realcanadiansuperstore.ca' },
+  { name: 'No Frills', host: 'www.nofrills.ca' }
+]) {
+  test(`${storefront.name} cart builder uses the shared persisted workflow`, async ({ page }) => {
+    const pageErrors = [];
+    page.on('pageerror', (error) => pageErrors.push(error.message));
+    await page.addInitScript({ content: userscript });
+    const searchUrl = `https://${storefront.host}/cart-list-fixture/search?search-bar=milk`;
+    const nextDataForCart = JSON.stringify({ props: { pageProps: {
+      initialSearchData: {
+        searchTermSubmitted: 'milk',
+        layout: { sections: { mainContentCollection: { components: [{ data: { productTiles: [
+          { productId: 'single-milk', title: 'Single milk 1 L', packageSizing: '1 L', pricing: { price: '4.00' } },
+          { productId: 'bulk-milk', title: 'Bulk milk 4 L', packageSizing: '4 L', pricing: { price: '6.00' } },
+          { productId: 'medium-milk', title: 'Medium milk 1 L', packageSizing: '1 L', pricing: { price: '3.00' } }
+        ] } }] } } }
+      }
+    } } }).replaceAll('<', '\\u003c');
+    await page.route(`https://${storefront.host}/cart-list-fixture/**`, (route) => route.fulfill({
+      contentType: 'text/html',
+      body: `<!doctype html><main data-testid="listing-page-container"><section data-testid="product-grid-component">
+        <article><div data-testid="product-image"></div><a href="/product/single-milk">Single milk</a><button>Add single milk</button></article>
+        <article><div data-testid="product-image"></div><a href="/product/bulk-milk">Bulk milk</a><button onclick="this.setAttribute('aria-label','Quantity increase')">Add bulk milk</button></article>
+        <article><div data-testid="product-image"></div><a href="/product/medium-milk">Medium milk</a><button>Add medium milk</button></article>
+      </section></main><script id="__NEXT_DATA__" type="application/json">${nextDataForCart}</script>`
+    }));
+    await page.route(`https://${storefront.host}/en/cart`, (route) => route.fulfill({
+      contentType: 'text/html',
+    body: '<!doctype html><main><article data-testid="cart-item"><a href="/product/bulk-milk">Bulk milk</a></article><aside><a href="/product/single-milk">Recommended milk</a></aside></main>'
+    }));
+
+    await page.goto(searchUrl);
+    await expect(page.locator('[data-lups-annotation]')).toHaveCount(3);
+    await page.locator('#lups-menu-button').hover();
+    await page.locator('#gppu-shopping-toggle').click();
+    await page.locator('#gppu-shopping-input').fill('milk');
+    await page.getByRole('button', { name: 'Preview items' }).click();
+    await expect(page.locator('#gppu-shopping-status')).toContainText('Preview complete', { timeout: 8_000 });
+    await expect(page.locator('#gppu-shopping-results')).toContainText('Bulk milk 4 L · $6.00 · $1.50/L');
+    await page.getByRole('button', { name: 'Add planned items' }).click();
+    await expect(page).toHaveURL(`https://${storefront.host}/en/cart`);
+    await expect(page.locator('#gppu-shopping-status')).toContainText('All planned Add actions completed', { timeout: 8_000 });
+    await expect(page.locator('#gppu-shopping-results')).toContainText('milk — added');
+    expect(pageErrors).toEqual([]);
+  });
+}
+
+test('Save-On cart builder preserves the fulfillment store through cart review', async ({ page }) => {
+  const pageErrors = [];
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+  await page.addInitScript({ content: userscript });
+  await page.route('https://www.saveonfoods.com/sm/pickup/rsid/6632/results*', (route) => route.fulfill({
+    contentType: 'text/html',
+    body: `<!doctype html><style>#grid{display:flex}.wrapper,article{width:170px;min-height:100px}</style>
+      <a href="/sm/pickup/rsid/6632/cart">Cart</a><ul id="grid">
+        <li class="wrapper"><article data-testid="ProductCardWrapper-single-milk"><button>Add single milk</button></article></li>
+        <li class="wrapper"><article data-testid="ProductCardWrapper-bulk-milk"><button onclick="this.setAttribute('aria-label','Quantity increase')">Add bulk milk</button></article></li>
+        <li class="wrapper"><article data-testid="ProductCardWrapper-medium-milk"><button>Add medium milk</button></article></li>
+      </ul>`
+  }));
+  await page.route('https://www.saveonfoods.com/sm/pickup/rsid/6632/cart', (route) => route.fulfill({
+    contentType: 'text/html',
+    body: '<!doctype html><main><article data-testid="CartItem-bulk-milk"><a href="/product/milk?sku=bulk-milk">Bulk milk</a></article><aside><a href="/product/milk?sku=single-milk">Recommended milk</a></aside></main>'
+  }));
+
+  await page.goto('https://www.saveonfoods.com/sm/pickup/rsid/6632/results?q=milk');
+  await page.evaluate(() => window.postMessage({
+    source: 'saveon-price-per-unit', version: 2, type: 'api-products', mode: 'snapshot', revision: 1,
+    context: { query: 'milk', storeId: '6632', pagePath: '/sm/pickup/rsid/6632/results?q=milk' },
+    products: [
+      { id: 'single-milk', name: 'Single milk 1 L', currentPrice: 4, unitPrice: '$4.00/L', unitOfSize: { size: 1, abbreviation: 'L' } },
+      { id: 'bulk-milk', name: 'Bulk milk 4 L', currentPrice: 6, unitPrice: '$1.50/L', unitOfSize: { size: 4, abbreviation: 'L' } },
+      { id: 'medium-milk', name: 'Medium milk 1 L', currentPrice: 3, unitPrice: '$3.00/L', unitOfSize: { size: 1, abbreviation: 'L' } }
+    ]
+  }, location.origin));
+  await expect(page.locator('[data-lups-annotation]')).toHaveCount(3);
+  await page.locator('#lups-menu-button').hover();
+  await page.locator('#gppu-shopping-toggle').click();
+  await page.locator('#gppu-shopping-input').fill('milk');
+  await page.getByRole('button', { name: 'Preview items' }).click();
+  await expect(page.locator('#gppu-shopping-status')).toContainText('Preview complete', { timeout: 8_000 });
+  await expect(page.locator('#gppu-shopping-results')).toContainText('Bulk milk 4 L · $6.00 · $1.50/L');
+  await page.getByRole('button', { name: 'Add planned items' }).click();
+  await expect(page).toHaveURL('https://www.saveonfoods.com/sm/pickup/rsid/6632/cart');
+  await expect(page.locator('#gppu-shopping-status')).toContainText('All planned Add actions completed', { timeout: 8_000 });
   expect(pageErrors).toEqual([]);
 });
 
@@ -1607,6 +1772,10 @@ for (const fixturePage of nonSearchRouteFixtures) {
 
     await expect(page.locator('#lups-control')).toHaveCount(0);
     await expect(page.locator('[data-lups-annotation]')).toHaveCount(0);
+    const standaloneCart = page.locator('#gppu-shopping-toggle');
+    await expect(standaloneCart).toBeVisible();
+    expect(await standaloneCart.evaluate((button) =>
+      Math.round(window.innerHeight - button.getBoundingClientRect().bottom))).toBe(18);
   });
 }
 

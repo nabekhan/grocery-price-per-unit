@@ -2,6 +2,7 @@ import { defineRetailerPlugin, installRetailerPlugin } from '../../runtime/retai
 import { installLoblawCapture } from './api-capture-main.js';
 import { getLoblawScope, installLoblawRuntime } from './content.js';
 import { isLoblawSearchPage } from './routes.js';
+import { installLoblawShoppingList } from './shopping-list.js';
 
 const plugin = defineRetailerPlugin({
   id: 'loblaw',
@@ -9,7 +10,11 @@ const plugin = defineRetailerPlugin({
   isSearchPage: isLoblawSearchPage,
   getScope: () => getLoblawScope(),
   installCapture: (global) => installLoblawCapture(global),
-  installRuntime: (_global, context) => installLoblawRuntime(context)
+  installRuntime: (_global, context) => {
+    const contentInstalled = installLoblawRuntime(context);
+    const shoppingInstalled = installLoblawShoppingList();
+    return contentInstalled !== false || shoppingInstalled !== false;
+  }
 });
 
 installRetailerPlugin(plugin, window);

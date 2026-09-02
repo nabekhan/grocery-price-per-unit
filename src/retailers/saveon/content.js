@@ -5,6 +5,7 @@ import { MAX_RENDERED_CARDS } from '../limits.js';
 import { claimRuntimeInstall } from '../../runtime/install.js';
 import { areOnlyOwnedMutations } from '../../runtime/mutations.js';
 import { captureWaitState, createScanScheduler } from '../../runtime/retailer-lifecycle.js';
+import { createTrustedCardProducts } from '../../runtime/trusted-card-products.js';
 
 /*!
  * Save-On result adapter. Candidate regions are ranked by overlap with current
@@ -44,6 +45,9 @@ let observer = null;
 let lifecycle = null;
 let scheduleScan = null;
 let isSearchPage = () => true;
+const shoppingProducts = createTrustedCardProducts();
+export const readSaveOnShoppingState = shoppingProducts.readState;
+export const readSaveOnShoppingModel = shoppingProducts.readModel;
 
 function messageScope(context) {
     const rawQuery = context?.query;
@@ -279,6 +283,24 @@ function leaveSearchPage() {
   for (const [wrapper] of hiddenPromotions) restorePromotion(wrapper);
   reconcileManagedCards();
   document.getElementById('lups-control')?.remove();
+  shoppingProducts.publish();
+  window.dispatchEvent(new CustomEvent('ppu-products-updated'));
+}
+
+function publishShoppingProducts(models = [], accepted = false) {
+  shoppingProducts.publish({
+    accepted,
+    entries: models.map((model) => ({
+      card: model.card,
+      matched: model.dataSource === 'api',
+      productId: model.productId,
+      name: model.name,
+      currentPrice: model.currentPrice,
+      normalizedUnitPrice: model.normalizedUnitPrice,
+      dimension: model.dimension
+    }))
+  });
+  window.dispatchEvent(new CustomEvent('ppu-products-updated'));
 }
 
 function scan() {
@@ -295,6 +317,7 @@ function scan() {
     if (control) updateStatus(control, state.restored
       ? { total: undefined, excluded: 0, restored: true }
       : { total: undefined, excluded: 0, dataState: captureWaitState(lifecycle, scope()) });
+    publishShoppingProducts([], state.scope === scope());
     return;
   }
   const control = ensureControl();
@@ -313,8 +336,10 @@ function scan() {
         excluded: 0,
         dataState: captureWaitState(lifecycle, scope())
       });
+    publishShoppingProducts([], false);
     return;
   }
+  publishShoppingProducts(grid.models, state.scope === scope());
   for (const model of grid.models) {
     if (model.dataSource === 'api') annotate(model);
     else clearAnnotation(model.productCard);
@@ -377,7 +402,7 @@ async function start() {
   injectStyles();
   scan();
   observer = new MutationObserver((records) => {
-    if (!areOnlyOwnedMutations(records, (record) => record.target.closest?.('#lups-control,[data-lups-annotation]'))) schedule();
+    if (!areOnlyOwnedMutations(records, (record) => record.target.closest?.('#lups-control,[data-lups-annotation],#gppu-shopping-assistant'))) schedule();
   });
   observer.observe(document.body, { attributes: true, attributeFilter: ['data-testid', 'aria-label'], childList: true, subtree: true });
   window.addEventListener('scroll', schedule, { passive: true, capture: true });

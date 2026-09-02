@@ -88,6 +88,60 @@ describe('RCSS main-world search capture', () => {
     expect(state.products['21554346_EA']).not.toHaveProperty('description');
   });
 
+  it('refines a same-document bootstrap when Superstore appends its store identity', async () => {
+    window.history.replaceState({}, '', '/en/search?search-bar=milk');
+    document.body.innerHTML = `<script id="__NEXT_DATA__" type="application/json">${JSON.stringify({
+      props: { pageProps: { initialSearchData: payloadFor('milk_EA') } }
+    })}</script>`;
+    window.eval(source);
+    const state = window[Symbol.for('rcss-price-per-unit.api-capture.v1')];
+    expect(state.context).toMatchObject({ query: 'milk', storeId: null, requestSequence: 0 });
+    expect(Object.keys(state.products)).toEqual(['milk_EA']);
+
+    window.history.replaceState({}, '', '/en/search?search-bar=milk&storeId=3730');
+    window.dispatchEvent(new MessageEvent('message', {
+      source: window,
+      origin: location.origin,
+      data: { source: 'rcss-price-per-unit', version: 2, type: 'api-products-request' }
+    }));
+
+    await vi.waitFor(() => expect(state.context).toMatchObject({
+      query: 'milk', storeId: '3730', requestSequence: 0
+    }));
+    expect(state.scope).toContain('query:milk|store:3730');
+    expect(state.revision).toBe(2);
+    expect(Object.keys(state.products)).toEqual(['milk_EA']);
+  });
+
+  it('never relabels bootstrap products after a search or path transition', () => {
+    window.history.replaceState({}, '', '/en/search?search-bar=milk');
+    document.body.innerHTML = `<script id="__NEXT_DATA__" type="application/json">${JSON.stringify({
+      props: { pageProps: { initialSearchData: payloadFor('milk_EA') } }
+    })}</script>`;
+    window.eval(source);
+    const state = window[Symbol.for('rcss-price-per-unit.api-capture.v1')];
+
+    window.history.replaceState({}, '', '/en/search?search-bar=rice&storeId=3730');
+    window.dispatchEvent(new MessageEvent('message', {
+      source: window,
+      origin: location.origin,
+      data: { source: 'rcss-price-per-unit', version: 2, type: 'api-products-request' }
+    }));
+
+    expect(state.context).toMatchObject({ query: 'milk', storeId: null, requestSequence: 0 });
+    expect(state.revision).toBe(1);
+    expect(Object.keys(state.products)).toEqual(['milk_EA']);
+
+    window.history.replaceState({}, '', '/en/food/dairy?search-bar=milk&storeId=3730');
+    window.dispatchEvent(new MessageEvent('message', {
+      source: window,
+      origin: location.origin,
+      data: { source: 'rcss-price-per-unit', version: 2, type: 'api-products-request' }
+    }));
+    expect(state.context).toMatchObject({ query: 'milk', storeId: null, requestSequence: 0 });
+    expect(state.revision).toBe(1);
+  });
+
   it('ignores malformed products and caps the bridge to sanitized fields', () => {
     document.body.innerHTML = `<script id="__NEXT_DATA__" type="application/json">${JSON.stringify({
       props: { pageProps: { initialSearchData: {

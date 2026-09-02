@@ -1,10 +1,13 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it } from 'vitest';
 import { chooseCheapestProduct, parseShoppingList } from '../../src/runtime/shopping-list-runner.js';
+import { createRetailerCartAdapter } from '../../src/runtime/retailer-cart-adapter.js';
 import {
   findWalmartAddButton,
   walmartCartProductIds
 } from '../../src/retailers/walmart/shopping-list.js';
+import { loblawCartProductIds } from '../../src/retailers/loblaw/shopping-list.js';
+import { saveOnCartProductIds } from '../../src/retailers/saveon/shopping-list.js';
 import {
   publishApiScanState,
   readApiScanModel,
@@ -37,6 +40,69 @@ describe('shared shopping-list behavior', () => {
     ]);
     expect(selected).toMatchObject({ productId: 'small', selectedBy: 'total' });
   });
+
+  it('pauses instead of choosing from an unconfirmed partial first page', async () => {
+    const originalScrollTo = window.scrollTo;
+    const scrollYDescriptor = Object.getOwnPropertyDescriptor(window, 'scrollY');
+    const heightDescriptor = Object.getOwnPropertyDescriptor(document.documentElement, 'scrollHeight');
+    let scrollPosition = 0;
+    Object.defineProperty(window, 'scrollY', { configurable: true, get: () => scrollPosition });
+    Object.defineProperty(document.documentElement, 'scrollHeight', { configurable: true, get: () => 5_000 });
+    window.scrollTo = (_x, y) => { scrollPosition = Number(y) || 0; };
+    try {
+      const adapter = createRetailerCartAdapter({
+        retailerName: 'Fixture', isSearchPage: () => true, searchQuery: () => 'milk',
+        searchUrl: () => location.href, cards: () => [], productIdForCard: () => null,
+        trustedState: () => null, trustedModel: () => null, isCartPage: () => false,
+        cartUrl: () => location.href, cartProductIds: () => [], cartItemEvidence: () => false,
+        maximumScrollSteps: 2, productSettleMs: 0
+      });
+      await expect(adapter.collectProducts()).resolves.toMatchObject({ status: 'incomplete' });
+    } finally {
+      window.scrollTo = originalScrollTo;
+      if (scrollYDescriptor) Object.defineProperty(window, 'scrollY', scrollYDescriptor);
+      else delete window.scrollY;
+      if (heightDescriptor) Object.defineProperty(document.documentElement, 'scrollHeight', heightDescriptor);
+      else delete document.documentElement.scrollHeight;
+    }
+  });
+
+  it('does not treat a vanished Add button or cart subtotal as Add confirmation', async () => {
+    document.body.innerHTML = `
+      <article data-product-id="milk"><button>Add milk</button></article>
+      <a href="/cart" aria-label="Cart total $42.50">Cart total $42.50</a>`;
+    const card = document.querySelector('article');
+    const button = card.querySelector('button');
+    const cartLink = document.querySelector('a[href="/cart"]');
+    button.getClientRects = () => [{ width: 80, height: 44 }];
+    cartLink.getClientRects = () => [{ width: 120, height: 44 }];
+    button.addEventListener('click', () => button.remove());
+    card.scrollIntoView = () => {};
+    const originalScrollTo = window.scrollTo;
+    window.scrollTo = () => {};
+    try {
+      const state = { accepted: true };
+      const adapter = createRetailerCartAdapter({
+        retailerName: 'Fixture', isSearchPage: () => true, searchQuery: () => 'milk',
+        searchUrl: () => location.href, cards: () => [card],
+        productIdForCard: (element) => element.dataset.productId,
+        trustedState: () => state,
+        trustedModel: (_state, element) => element === card ? {
+          matched: true, productId: 'milk', name: 'Milk 1 L', currentPrice: 4,
+          normalizedUnitPrice: 4, dimension: 'volume'
+        } : null,
+        isCartPage: () => false, cartUrl: () => location.href,
+        cartProductIds: () => [], cartItemEvidence: () => false,
+        productSettleMs: 0, addVerifyMs: 20
+      });
+      await expect(adapter.addProduct({
+        productId: 'milk', name: 'Milk 1 L', currentPrice: 4,
+        normalizedUnitPrice: 4, dimension: 'volume'
+      })).resolves.toMatchObject({ status: 'missed' });
+    } finally {
+      window.scrollTo = originalScrollTo;
+    }
+  });
 });
 
 describe('Walmart shopping adapter boundaries', () => {
@@ -64,9 +130,19 @@ describe('Walmart shopping adapter boundaries', () => {
 
   it('reconciles cart product IDs from card identity and Walmart product URLs', () => {
     document.body.innerHTML = `
-      <section data-item-id="card-id"></section>
-      <a href="/en/ip/bananas/url-id">Bananas</a>
-      <a href="/help">Help</a>`;
+      <section data-testid="cart-item" data-item-id="card-id">
+        <a href="/en/ip/bananas/url-id">Bananas</a>
+      </section>
+      <aside><a href="/en/ip/recommended/recommendation-id">Recommendation</a></aside>`;
     expect(walmartCartProductIds()).toEqual(['card-id', 'url-id']);
+  });
+
+  it('restricts Loblaw and Save-On reconciliation to actual cart items', () => {
+    document.body.innerHTML = `
+      <article data-testid="cart-item"><a href="/product/cart-loblaw">Cart item</a></article>
+      <article data-testid="CartItem-saveon"><a href="/product/milk?sku=cart-saveon">Cart item</a></article>
+      <aside><a href="/product/recommendation">Recommendation</a></aside>`;
+    expect(loblawCartProductIds()).toEqual(['cart-loblaw']);
+    expect(saveOnCartProductIds()).toEqual(['cart-saveon']);
   });
 });

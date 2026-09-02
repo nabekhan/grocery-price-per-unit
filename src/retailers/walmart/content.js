@@ -893,8 +893,8 @@ function ownedStateSignature(container) {
 
 function ownedNode(node) {
     const element = node?.nodeType === Node.ELEMENT_NODE ? node : node?.parentElement;
-    return Boolean(element?.matches?.('#lups-control, #ppu-sort-control, .price-per-unit-info, .ppu-walmart-icon, [data-lups-annotation]') ||
-        element?.closest?.('#lups-control, #ppu-sort-control, .price-per-unit-info, .ppu-walmart-icon, [data-lups-annotation]'));
+    return Boolean(element?.matches?.('#lups-control, #ppu-sort-control, #gppu-shopping-assistant, .price-per-unit-info, .ppu-walmart-icon, [data-lups-annotation]') ||
+        element?.closest?.('#lups-control, #ppu-sort-control, #gppu-shopping-assistant, .price-per-unit-info, .ppu-walmart-icon, [data-lups-annotation]'));
 }
 
 function ownedMutation(mutation) {
