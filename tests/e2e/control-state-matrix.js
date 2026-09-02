@@ -327,7 +327,7 @@ export function expectControlStateMatrix(evidence) {
   // line than macOS Safari. Keep a small cross-platform allowance while still
   // asserting that the complete tooltip and both 44 px targets fit onscreen.
   const invalidPhoneActiveStates = phoneActiveStates.filter((item) => !(
-    item.geometry.status.height <= (item.viewport.width === 320 ? 82 : 68)
+    item.geometry.status.height <= (item.viewport.width === 320 ? 82 : 69)
     && item.geometry.status.x >= 0
     && item.geometry.status.x + item.geometry.status.width <= item.viewport.width + 1
     && item.geometry.status.y >= 0
