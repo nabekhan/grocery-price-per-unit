@@ -8,6 +8,7 @@ import { MAX_RENDERED_CARDS, publishApiScanState } from './scan-state.js';
 import { claimRuntimeInstall } from '../../runtime/install.js';
 import { areOnlyOwnedMutations } from '../../runtime/mutations.js';
 import { createScanScheduler } from '../../runtime/retailer-lifecycle.js';
+import { createTrustedProductSnapshot } from '../../runtime/trusted-card-products.js';
 
 /*!
  * Walmart card annotator. Scope-checked API/cache records join rendered cards
@@ -93,6 +94,10 @@ const processedSignatures = new WeakMap();
 const processedStates = new WeakMap();
 const managedProductContainers = new Set();
 const apiProductsById = new NativeMap();
+const shoppingSnapshot = createTrustedProductSnapshot();
+export const readWalmartShoppingSnapshot = () => apiProductScope === getWalmartScope()
+    ? shoppingSnapshot.readState()
+    : Object.freeze({ accepted: false, count: 0, products: Object.freeze([]) });
 const API_BRIDGE_SOURCE = 'walmart-price-per-unit';
 const API_BRIDGE_VERSION = 2;
 const isProductArray = Array.isArray;
@@ -364,6 +369,13 @@ function ingestApiProductsMessageTransaction(event) {
     }
     apiProductScope = nextScope;
     apiProductRevision = Math.max(apiProductRevision, revision);
+    const snapshotProducts = [];
+    const snapshotKeys = mapKeys(apiProductsById);
+    for (let step = mapIteratorNext(snapshotKeys); !step.done; step = mapIteratorNext(snapshotKeys)) {
+        const model = modelForApiSnapshot(mapGet(apiProductsById, step.value));
+        if (model) snapshotProducts.push(model);
+    }
+    shoppingSnapshot.publish({ accepted: true, products: snapshotProducts });
     reportApiStatus('info', 'accepted sanitized product message', {
         mode,
         revision,
@@ -489,6 +501,26 @@ function amountInBaseUnit(amount, unit) {
     if (unit === Unit.Count || unit === Unit.Load) return amount;
     if (!Number.isFinite(unit.ScaleToStandardUnit)) return null;
     return amount * unit.ScaleToStandardUnit;
+}
+
+// This uses only the already-sanitized response record. No product card,
+// image, title element, or retailer DOM price is consulted while planning.
+function modelForApiSnapshot(product) {
+    const currentPrice = Number.isFinite(product?.price) ? product.price : product?.averagePrice;
+    if (!product?.id || !product?.name || !Number.isFinite(currentPrice) || currentPrice <= 0) return null;
+    const unitPrice = extractApiPricePerUnit(product);
+    let unitObj = extractUnitFromTitle(product.name, unitPrice ? dimensionForUnit(unitPrice.unit) : null);
+    if (product.variableOptions === true) unitObj = resolveVariableOptionUnit(product, product.name, unitObj);
+    const base = unitPrice ? amountInBaseUnit(unitPrice.amount, unitPrice.unit) : null;
+    const dimension = unitPrice ? dimensionForUnit(unitPrice.unit) : dimensionForUnit(unitObj?.unit);
+    return {
+        matched: true,
+        productId: product.id,
+        name: product.name,
+        currentPrice,
+        normalizedUnitPrice: unitPrice && base ? unitPrice.value / base : pricePerStandardUnit(currentPrice, unitObj),
+        dimension: ['mass', 'volume', 'count'].includes(dimension) ? dimension : null
+    };
 }
 
 function collectUnitCandidates(title) {
@@ -920,6 +952,7 @@ function leaveSearchPage() {
         exposedStateChanged ||= previousState !== ownedStateSignature(container);
     }
     const publication = publishApiScanState({ accepted: false, renderedCards: 0, apiCards: 0 }, []);
+    shoppingSnapshot.publish();
     if (exposedStateChanged || publication.changed) window.dispatchEvent(new CustomEvent('ppu-products-updated'));
 }
 

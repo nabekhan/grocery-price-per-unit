@@ -2,6 +2,7 @@ import { claimRuntimeInstall } from '../../runtime/install.js';
 import { createRetailerCartAdapter, findCardAddButton } from '../../runtime/retailer-cart-adapter.js';
 import { createShoppingListRunner } from '../../runtime/shopping-list-runner.js';
 import { readApiScanModel, readApiScanState } from './scan-state.js';
+import { readWalmartShoppingSnapshot } from './content.js';
 import { isWalmartSearchPage } from './routes.js';
 
 /* Walmart owns only its stable route, card, and cart identity selectors. */
@@ -56,6 +57,7 @@ export function createWalmartShoppingAdapter() {
     productIdForCard,
     trustedState: readApiScanState,
     trustedModel: readApiScanModel,
+    trustedSnapshot: readWalmartShoppingSnapshot,
     isCartPage: (url) => url.pathname.split('/').filter(Boolean).at(-1)?.toLowerCase() === 'cart',
     cartUrl: walmartCartUrl,
     cartProductIds: walmartCartProductIds,

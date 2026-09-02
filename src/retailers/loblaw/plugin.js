@@ -10,9 +10,9 @@ const plugin = defineRetailerPlugin({
   isSearchPage: isLoblawSearchPage,
   getScope: () => getLoblawScope(),
   installCapture: (global) => installLoblawCapture(global),
-  installRuntime: (_global, context) => {
+  installRuntime: (_global, context, capture) => {
     const contentInstalled = installLoblawRuntime(context);
-    const shoppingInstalled = installLoblawShoppingList();
+    const shoppingInstalled = installLoblawShoppingList(capture);
     return contentInstalled !== false || shoppingInstalled !== false;
   }
 });

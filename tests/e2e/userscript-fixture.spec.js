@@ -610,18 +610,24 @@ test('Walmart cart builder previews, explicitly adds, resumes, and verifies the 
   await page.locator('#gppu-shopping-input').fill('bananas');
   await page.getByRole('button', { name: 'Preview items' }).click();
 
-  await expect(page.locator('#gppu-shopping-status')).toContainText('Preview complete', { timeout: 8_000 });
-  expect(await page.evaluate(() => window.__gppuLazyProductLoaded)).toBe(true);
+  await expect(page.getByRole('button', { name: 'Add', exact: true })).toBeVisible({ timeout: 8_000 });
+  await expect(page.getByRole('heading', { name: 'Cart builder' })).toHaveCount(0);
+  await expect(page.locator('#gppu-shopping-status')).toBeHidden();
+  await expect(page.locator('#gppu-shopping-results strong')).toHaveText(['bananas']);
+  // Planning now ranks the complete captured API snapshot without scrolling
+  // the virtualized grid. The lazy card is only requested in the explicit Add
+  // phase, when the exact product/control must be revalidated.
+  expect(await page.evaluate(() => window.__gppuLazyProductLoaded)).toBeUndefined();
   await expect(page.locator('#gppu-shopping-results')).toContainText('First-page bananas 1 kg · $1.00');
   await expect(page.locator('[aria-label="Quantity increase"]')).toHaveCount(0);
   await page.screenshot({
     path: path.join(root, 'artifacts/screenshots/shopping-list/walmart-preview.png'),
     fullPage: false
   });
-  await page.getByRole('button', { name: 'Add planned items' }).click();
+  await page.getByRole('button', { name: 'Add', exact: true }).click();
 
   await expect(page).toHaveURL('https://www.walmart.ca/en/cart');
-  await expect(page.locator('#gppu-shopping-status')).toContainText('All planned Add actions completed', { timeout: 8_000 });
+  await expect(page.locator('#gppu-shopping-status')).toBeHidden({ timeout: 8_000 });
   await expect(page.locator('#gppu-shopping-results')).toContainText('bananas — added');
   await expect(page.locator('a[href*="lazy-bananas"]')).toHaveCount(1);
   expect(pageErrors).toEqual([]);
@@ -654,7 +660,7 @@ for (const storefront of [
         <article><div data-testid="product-image"></div><a href="/product/medium-milk">Medium milk</a><button>Add medium milk</button></article>
       </section></main><script id="__NEXT_DATA__" type="application/json">${nextDataForCart}</script>`
     }));
-    await page.route(`https://${storefront.host}/en/cart`, (route) => route.fulfill({
+    await page.route(`https://${storefront.host}/en/cartReview`, (route) => route.fulfill({
       contentType: 'text/html',
     body: '<!doctype html><main><article data-testid="cart-item"><a href="/product/bulk-milk">Bulk milk</a></article><aside><a href="/product/single-milk">Recommended milk</a></aside></main>'
     }));
@@ -665,11 +671,11 @@ for (const storefront of [
     await page.locator('#gppu-shopping-toggle').click();
     await page.locator('#gppu-shopping-input').fill('milk');
     await page.getByRole('button', { name: 'Preview items' }).click();
-    await expect(page.locator('#gppu-shopping-status')).toContainText('Preview complete', { timeout: 8_000 });
+    await expect(page.getByRole('button', { name: 'Add', exact: true })).toBeVisible({ timeout: 8_000 });
     await expect(page.locator('#gppu-shopping-results')).toContainText('Bulk milk 4 L · $6.00 · $1.50/L');
-    await page.getByRole('button', { name: 'Add planned items' }).click();
-    await expect(page).toHaveURL(`https://${storefront.host}/en/cart`);
-    await expect(page.locator('#gppu-shopping-status')).toContainText('All planned Add actions completed', { timeout: 8_000 });
+    await page.getByRole('button', { name: 'Add', exact: true }).click();
+    await expect(page).toHaveURL(`https://${storefront.host}/en/cartReview`);
+    await expect(page.locator('#gppu-shopping-status')).toBeHidden({ timeout: 8_000 });
     await expect(page.locator('#gppu-shopping-results')).toContainText('milk — added');
     expect(pageErrors).toEqual([]);
   });
@@ -679,6 +685,14 @@ test('Save-On cart builder preserves the fulfillment store through cart review',
   const pageErrors = [];
   page.on('pageerror', (error) => pageErrors.push(error.message));
   await page.addInitScript({ content: userscript });
+  await page.route('https://storefrontgateway.saveonfoods.com/api/stores/6632/search*', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify({ products: [
+      { sku: 'single-milk', name: 'Single milk 1 L', priceNumeric: 4, unitPrice: '$4/L', unitOfSize: { size: 1, abbreviation: 'L' } },
+      { sku: 'bulk-milk', name: 'Bulk milk 4 L', priceNumeric: 6, unitPrice: '$1.50/L', unitOfSize: { size: 4, abbreviation: 'L' } },
+      { sku: 'medium-milk', name: 'Medium milk 1 L', priceNumeric: 3, unitPrice: '$3/L', unitOfSize: { size: 1, abbreviation: 'L' } }
+    ] })
+  }));
   await page.route('https://www.saveonfoods.com/sm/pickup/rsid/6632/results*', (route) => route.fulfill({
     contentType: 'text/html',
     body: `<!doctype html><style>#grid{display:flex}.wrapper,article{width:170px;min-height:100px}</style>
@@ -708,11 +722,11 @@ test('Save-On cart builder preserves the fulfillment store through cart review',
   await page.locator('#gppu-shopping-toggle').click();
   await page.locator('#gppu-shopping-input').fill('milk');
   await page.getByRole('button', { name: 'Preview items' }).click();
-  await expect(page.locator('#gppu-shopping-status')).toContainText('Preview complete', { timeout: 8_000 });
+  await expect(page.getByRole('button', { name: 'Add', exact: true })).toBeVisible({ timeout: 8_000 });
   await expect(page.locator('#gppu-shopping-results')).toContainText('Bulk milk 4 L · $6.00 · $1.50/L');
-  await page.getByRole('button', { name: 'Add planned items' }).click();
+  await page.getByRole('button', { name: 'Add', exact: true }).click();
   await expect(page).toHaveURL('https://www.saveonfoods.com/sm/pickup/rsid/6632/cart');
-  await expect(page.locator('#gppu-shopping-status')).toContainText('All planned Add actions completed', { timeout: 8_000 });
+  await expect(page.locator('#gppu-shopping-status')).toBeHidden({ timeout: 8_000 });
   expect(pageErrors).toEqual([]);
 });
 

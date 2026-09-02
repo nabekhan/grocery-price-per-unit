@@ -1,10 +1,10 @@
-import { extractGrid } from './site.js';
+import { extractGrid, modelForApiProduct } from './site.js';
 import { isSortableTotalPrice, sortModels } from '../../sorting/sort.js';
 import { annotate, clearAnnotation, createControl, injectStyles, updateStatus } from '../../ui/control.js';
 import { claimRuntimeInstall } from '../../runtime/install.js';
 import { areOnlyOwnedMutations } from '../../runtime/mutations.js';
 import { captureWaitState, createScanScheduler } from '../../runtime/retailer-lifecycle.js';
-import { createTrustedCardProducts } from '../../runtime/trusted-card-products.js';
+import { createTrustedCardProducts, createTrustedProductSnapshot } from '../../runtime/trusted-card-products.js';
 
 /*!
  * Superstore/No Frills DOM adapter. Accepted API snapshots stay scoped to the
@@ -26,8 +26,12 @@ let lifecycle = null;
 let scheduleScan = null;
 let isSearchPage = () => true;
 const shoppingProducts = createTrustedCardProducts();
+const shoppingSnapshot = createTrustedProductSnapshot();
 export const readLoblawShoppingState = shoppingProducts.readState;
 export const readLoblawShoppingModel = shoppingProducts.readModel;
+export const readLoblawShoppingSnapshot = () => apiScope === currentScope()
+  ? shoppingSnapshot.readState()
+  : Object.freeze({ accepted: false, count: 0, products: Object.freeze([]) });
 const debug = false;
 const log = (...args) => { if (debug) console.info('[Grocery Price Per Unit: Loblaw]', ...args); };
 
@@ -151,6 +155,10 @@ function ingestApiMessage(event) {
     for (const [id, product] of nextProducts) apiProducts.set(id, product);
     apiScope = scope;
     apiRevision = revision;
+    shoppingSnapshot.publish({
+      accepted: true,
+      products: [...apiProducts.values()].map((product) => ({ ...modelForApiProduct(product), matched: true }))
+    });
     log('accepted API products', { products: apiProducts.size, revision: apiRevision, scope });
     if (!lifecycle?.accept(scope)) schedule({ urgent: true });
   } catch (error) {
@@ -316,6 +324,7 @@ function leaveSearchPage() {
   restoreOrdering();
   document.getElementById('lups-control')?.remove();
   shoppingProducts.publish();
+  shoppingSnapshot.publish();
   window.dispatchEvent(new CustomEvent('ppu-products-updated'));
 }
 

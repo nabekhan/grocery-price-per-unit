@@ -34,6 +34,22 @@ describe('formal retailer plugin contract', () => {
     expect(result).toEqual({ matched: true, id: 'fixture', captureInstalled: true, runtimeInstalled: true });
   });
 
+  it('passes a capture capability lexically to the runtime without publishing it', () => {
+    const capability = Object.freeze({ queryProducts: vi.fn() });
+    const runtime = vi.fn(() => true);
+    const fixture = plugin({
+      installCapture: vi.fn(() => capability),
+      installRuntime: runtime
+    });
+
+    installRetailerPlugin(fixture, {
+      location: { hostname: 'shop.example.ca', href: 'https://shop.example.ca/search?q=milk' },
+      document: { readyState: 'loading' }
+    });
+
+    expect(runtime).toHaveBeenCalledWith(expect.anything(), expect.anything(), capability);
+  });
+
   it('leaves every plugin phase inert on an unrelated or near-match host', () => {
     const fixture = plugin();
     expect(installRetailerPlugin(fixture, {

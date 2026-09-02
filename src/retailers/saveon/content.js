@@ -5,7 +5,7 @@ import { MAX_RENDERED_CARDS } from '../limits.js';
 import { claimRuntimeInstall } from '../../runtime/install.js';
 import { areOnlyOwnedMutations } from '../../runtime/mutations.js';
 import { captureWaitState, createScanScheduler } from '../../runtime/retailer-lifecycle.js';
-import { createTrustedCardProducts } from '../../runtime/trusted-card-products.js';
+import { createTrustedCardProducts, createTrustedProductSnapshot } from '../../runtime/trusted-card-products.js';
 
 /*!
  * Save-On result adapter. Candidate regions are ranked by overlap with current
@@ -46,8 +46,12 @@ let lifecycle = null;
 let scheduleScan = null;
 let isSearchPage = () => true;
 const shoppingProducts = createTrustedCardProducts();
+const shoppingSnapshot = createTrustedProductSnapshot();
 export const readSaveOnShoppingState = shoppingProducts.readState;
 export const readSaveOnShoppingModel = shoppingProducts.readModel;
+export const readSaveOnShoppingSnapshot = () => state.scope === scope()
+  ? shoppingSnapshot.readState()
+  : Object.freeze({ accepted: false, count: 0, products: Object.freeze([]) });
 
 function messageScope(context) {
     const rawQuery = context?.query;
@@ -77,7 +81,7 @@ function applyMode(value = 'restore') {
   }
 }
 
-function normalizeProduct(value, id) {
+export function normalizeSaveOnApiProduct(value, id) {
   if (!value || typeof value !== 'object' || !/^[a-zA-Z0-9._:-]+$/.test(id)
     || id === '__proto__' || id === 'prototype' || id === 'constructor') return null;
   const valueId = value.id;
@@ -97,6 +101,7 @@ function normalizeProduct(value, id) {
   const rawSizeValue = rawSize?.size;
   const rawAbbreviation = rawSize?.abbreviation;
   const rawType = rawSize?.type;
+  const rawAvailable = value.available ?? value.isAvailable;
   const size = typeof rawSizeValue === 'number' && Number.isFinite(rawSizeValue)
     && rawSizeValue > 0 && rawSizeValue <= 1_000_000_000 ? rawSizeValue : null;
   const abbreviation = bounded(rawAbbreviation, 32);
@@ -104,8 +109,22 @@ function normalizeProduct(value, id) {
   const unitOfSize = size && (abbreviation || type) ? { size, abbreviation, type } : null;
   const name = bounded(valueName, 1500);
   return name && !Number.isNaN(price) ? {
-    id, name, currentPrice: price, unitPrice: bounded(valueUnitPrice, 160), unitOfSize
+    id, name, currentPrice: price, unitPrice: bounded(valueUnitPrice, 160), unitOfSize,
+    available: rawAvailable === false ? false : true
   } : null;
+}
+
+// A DOM-free twin of the grid parser. It lets Cart Builder plan directly from
+// the accepted search response before virtualized cards/images exist.
+export function modelForSaveOnApiProduct(api) {
+  if (!api?.id || !api?.name) return null;
+  const size = api.unitOfSize;
+  const rawPackageText = size?.size && (size.abbreviation || size.type)
+    ? `${size.size} ${size.abbreviation || size.type}` : '';
+  return parseProduct({
+    productId: api.id, name: api.name, currentPrice: api.currentPrice,
+    rawPackageText, rawUnitPriceText: api.unitPrice || '', promotionText: '', currentPriceCertain: true
+  });
 }
 
 function ingestApiMessage(event) {
@@ -133,7 +152,7 @@ function ingestApiMessage(event) {
     for (let index = 0; index < productCount; index += 1) {
       const value = productsPayload[index];
       const id = value?.id;
-      const product = normalizeProduct(value, id);
+      const product = normalizeSaveOnApiProduct(value, id);
       if (!product) continue;
       if (nextProducts.has(id)) return;
       nextProducts.set(id, product);
@@ -143,6 +162,12 @@ function ingestApiMessage(event) {
     for (const [id, product] of nextProducts) products.set(id, product);
     state.scope = incomingScope;
     state.revision = revision;
+    shoppingSnapshot.publish({
+      accepted: true,
+      products: [...products.values()].map((product) => ({
+        ...modelForSaveOnApiProduct(product), matched: true, addable: product.available !== false
+      }))
+    });
     if (!lifecycle?.accept(incomingScope)) schedule({ urgent: true });
   } catch {
     // Reject the complete snapshot transaction when any message-owned getter
@@ -284,6 +309,7 @@ function leaveSearchPage() {
   reconcileManagedCards();
   document.getElementById('lups-control')?.remove();
   shoppingProducts.publish();
+  shoppingSnapshot.publish();
   window.dispatchEvent(new CustomEvent('ppu-products-updated'));
 }
 

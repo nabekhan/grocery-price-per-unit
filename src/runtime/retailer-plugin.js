@@ -54,7 +54,14 @@ export function installRetailerPlugin(plugin, global = globalThis) {
   });
   // Capture must be first. A response that occurs between these phases remains
   // replayable through the plugin's bounded snapshot channel when UI subscribes.
-  const captureInstalled = plugin.installCapture(global, context) !== false;
-  const runtimeInstalled = plugin.installRuntime(global, context) !== false;
+  /*
+   * Capture may return a small lexical capability in addition to signalling
+   * installation.  It is deliberately passed directly to the runtime rather
+   * than attached to window: request templates can include authentication
+   * headers and must never become page-observable state.
+   */
+  const capture = plugin.installCapture(global, context);
+  const captureInstalled = capture !== false;
+  const runtimeInstalled = plugin.installRuntime(global, context, capture) !== false;
   return Object.freeze({ matched: true, id: plugin.id, captureInstalled, runtimeInstalled });
 }

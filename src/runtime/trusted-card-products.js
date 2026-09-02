@@ -43,3 +43,40 @@ export function createTrustedCardProducts({ maximum = 500 } = {}) {
 
   return Object.freeze({ publish, readState, readModel });
 }
+
+/*
+ * Current-query product snapshots are deliberately separate from the card
+ * WeakMap above.  A search response can contain every first-page product long
+ * before (or without) the storefront rendering every image/card.  Cart
+ * planning may rank that sanitized response, but adding still revalidates a
+ * real card and control before it clicks anything.
+ */
+export function createTrustedProductSnapshot({ maximum = 500 } = {}) {
+  let current = Object.freeze({ accepted: false, count: 0, products: Object.freeze([]) });
+
+  function publish({ accepted = false, products = [] } = {}) {
+    const next = [];
+    const seen = new Set();
+    for (const value of Array.isArray(products) ? products.slice(0, maximum) : []) {
+      const productId = bounded(value?.productId, 160);
+      const name = bounded(value?.name, 1_500);
+      if (!productId || !name || seen.has(productId)) continue;
+      seen.add(productId);
+      next.push(Object.freeze({
+        matched: value?.matched === true,
+        // API snapshots prove product availability, not the presence of a
+        // rendered Add button. The add phase still checks that control.
+        addable: value?.addable !== false,
+        productId,
+        name,
+        currentPrice: positive(value?.currentPrice, 1_000_000),
+        normalizedUnitPrice: positive(value?.normalizedUnitPrice, 1_000_000_000),
+        dimension: DIMENSIONS.has(value?.dimension) ? value.dimension : null
+      }));
+    }
+    current = Object.freeze({ accepted: accepted === true, count: next.length, products: Object.freeze(next) });
+    return current;
+  }
+
+  return Object.freeze({ publish, readState: () => current });
+}

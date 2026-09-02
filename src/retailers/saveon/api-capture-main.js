@@ -170,6 +170,9 @@ export function installSaveOnCapture(global = window) {
       currentPrice: price(raw.priceNumeric ?? raw.wholePrice ?? raw.price),
       unitPrice: unitPrice(raw.unitPrice || raw.pricePerUnit),
       unitOfSize: size?.size && (size.abbreviation || size.type) ? size : null,
+      // Preserve only an explicit negative availability signal. Absent fields
+      // are not inferred, keeping existing storefront records compatible.
+      available: raw.available === false || raw.isAvailable === false ? false : true,
       sellBy: text(raw.sellBy, 40)
     };
   }

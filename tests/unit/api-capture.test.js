@@ -4,6 +4,17 @@ import fs from 'node:fs';
 
 const source = `${fs.readFileSync('src/retailers/loblaw/api-capture-main.js', 'utf8')
   .replace('export function installLoblawCapture', 'function installLoblawCapture')}\ninstallLoblawCapture(window);`;
+const capabilitySource = `${fs.readFileSync('src/retailers/loblaw/api-capture-main.js', 'utf8')
+  .replace('export function installLoblawCapture', 'function installLoblawCapture')}\nwindow.__gppuLoblawCapability = installLoblawCapture(window);`;
+// jsdom's immutable location uses localhost. Add that test-only hostname to
+// the production banner map so this one case can exercise the page-session
+// bootstrap without weakening the runtime hostname allow-list.
+const sessionCapabilitySource = capabilitySource.replace(
+  "'www.nofrills.ca': 'nofrills'",
+  "'www.nofrills.ca': 'nofrills', 'localhost': 'nofrills'"
+);
+const OriginalHeaders = window.Headers;
+const OriginalXMLHttpRequest = window.XMLHttpRequest;
 
 const payloadFor = (id, options = {}) => ({
   searchTermSubmitted: options.query || 'milk',
@@ -33,11 +44,302 @@ const searchRequest = (filter, from = null) => ({
 beforeEach(() => {
   window.history.replaceState({}, '', '/en/search?search-bar=milk&storeId=fixture-store');
   document.documentElement.innerHTML = '<head></head><body></body>';
+  window.localStorage.clear();
+  document.cookie = 'fulfillment_pickup_type=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/';
   delete window[Symbol.for('rcss-price-per-unit.api-capture.v1')];
+  delete window.__gppuLoblawCapability;
+  window.Headers = OriginalHeaders;
+  window.XMLHttpRequest = OriginalXMLHttpRequest;
   window.fetch = vi.fn(async () => new Response('{}', { status: 200 }));
 });
 
 describe('RCSS main-world search capture', () => {
+  it('replays a captured v2 search template for a new query without changing the current snapshot scope', async () => {
+    const endpoint = 'https://api.pcexpress.ca/pcx-bff/api/v2/products/search?from=48';
+    const original = JSON.stringify({
+      listingInfo: {
+        filters: { 'search-bar': ['milk'], brand: ['fixture'] },
+        pagination: { from: 48, page: 2, offset: 96 }
+      }
+    });
+    const calls = [];
+    window.fetch = vi.fn(async (url, options) => {
+      calls.push({ url, options });
+      const body = JSON.parse(options.body);
+      return jsonResponse(payloadFor(body.listingInfo.filters['search-bar'][0] === 'rice' ? 'rice_EA' : 'milk_EA', {
+        query: body.listingInfo.filters['search-bar'][0]
+      }));
+    });
+    window.eval(capabilitySource);
+
+    await window.fetch(endpoint, { method: 'POST', headers: { 'x-fixture': 'yes' }, body: original });
+    await vi.waitFor(() => expect(window[Symbol.for('rcss-price-per-unit.api-capture.v1')].context.query).toBe('milk'));
+    const result = await window.__gppuLoblawCapability.queryProducts(' Rice ');
+
+    expect(result).toMatchObject({ status: 'complete', products: [expect.objectContaining({ id: 'rice_EA' })] });
+    expect(calls).toHaveLength(2);
+    expect(calls[1].url).toContain('from=0');
+    expect(calls[1].options.headers.get('x-fixture')).toBe('yes');
+    expect(JSON.parse(calls[1].options.body)).toMatchObject({
+      listingInfo: { filters: { 'search-bar': ['rice'] }, pagination: { from: 0, page: 2, offset: 0 } }
+    });
+    // Direct previewing is read-only and must not relabel the live UI data.
+    expect(window[Symbol.for('rcss-price-per-unit.api-capture.v1')].context.query).toBe('milk');
+    expect(window[Symbol.for('rcss-price-per-unit.api-capture.v1')].products.rice_EA).toBeUndefined();
+  });
+
+  it('supports a v1 term body and resets only recognized pagination fields', async () => {
+    const endpoint = 'https://api.pcexpress.ca/pcx-bff/api/v1/products/search';
+    const calls = [];
+    window.fetch = vi.fn(async (url, options) => {
+      calls.push({ url, options });
+      return jsonResponse(payloadFor('rice_EA', { query: JSON.parse(options.body).term }));
+    });
+    window.eval(capabilitySource);
+
+    await window.fetch(endpoint, {
+      method: 'POST', body: JSON.stringify({ term: 'milk', pagination: { from: 25, skip: 25, size: 48 } })
+    });
+    const result = await window.__gppuLoblawCapability.queryProducts('rice');
+
+    expect(result?.products[0]).toMatchObject({ id: 'rice_EA' });
+    expect(JSON.parse(calls[1].options.body)).toMatchObject({
+      term: 'rice', pagination: { from: 0, skip: 0, size: 48 }
+    });
+  });
+
+  it('queries validated initial Next data first without a captured PCX request', async () => {
+    document.body.innerHTML = `<script id="__NEXT_DATA__" type="application/json">${JSON.stringify({
+      buildId: 'fixture_build-1', props: { pageProps: { initialSearchData: payloadFor('milk_EA') } }
+    })}</script>`;
+    const calls = [];
+    window.fetch = vi.fn(async (url) => {
+      calls.push(String(url));
+      return jsonResponse({ props: { pageProps: { initialSearchData: payloadFor('bread_EA', { query: 'bread' }) } } });
+    });
+    window.eval(capabilitySource);
+    const result = await window.__gppuLoblawCapability.queryProducts('bread');
+    expect(result).toMatchObject({ status: 'complete', products: [expect.objectContaining({ id: 'bread_EA' })] });
+    expect(calls).toEqual([expect.stringContaining('/_next/data/fixture_build-1/en/search.json?search-bar=bread&storeId=fixture-store')]);
+  });
+
+  it('uses native Headers for replay even if the page replaces window.Headers', async () => {
+    const endpoint = 'https://api.pcexpress.ca/pcx-bff/api/v2/products/search';
+    const calls = [];
+    window.fetch = vi.fn(async (url, options) => {
+      calls.push({ url: String(url), options });
+      return jsonResponse(payloadFor('rice_EA', { query: JSON.parse(options.body).listingInfo.filters['search-bar'][0] }));
+    });
+    window.eval(capabilitySource);
+    await window.fetch(endpoint, { method: 'POST', headers: { authorization: 'private-value' }, body: searchRequest(null).body });
+    window.Headers = class ReplacedHeaders { constructor() { throw new Error('page replacement observed headers'); } };
+    await expect(window.__gppuLoblawCapability.queryProducts('rice')).resolves.toMatchObject({ status: 'complete' });
+    expect(calls[1].options.headers.get('authorization')).toBe('private-value');
+  });
+
+  it('verifies the current pickup cart with headers from the observed product search', async () => {
+    window.history.replaceState({}, '', '/en/search?search-bar=milk&storeId=fixture-store&cartId=cart_fixture');
+    document.cookie = 'fulfillment_pickup_type=store; path=/';
+    const calls = [];
+    window.fetch = vi.fn(async (url, options = {}) => {
+      calls.push({ url: String(url), options });
+      return String(url).includes('/carts/cart_fixture')
+        ? jsonResponse({ entries: {} })
+        : jsonResponse(payloadFor('milk_EA'));
+    });
+    window.eval(capabilitySource);
+
+    await window.fetch('https://api.pcexpress.ca/pcx-bff/api/v2/products/search', {
+      method: 'POST', headers: { authorization: 'private-value' }, body: searchRequest(null).body
+    });
+
+    await vi.waitFor(() => expect(window[Symbol.for('rcss-price-per-unit.api-capture.v1')].cartCapabilityStatus)
+      .toBe('ready'));
+    expect(calls.find((call) => call.url.includes('/carts/cart_fixture'))).toMatchObject({
+      url: 'https://api.pcexpress.ca/pcx-bff/api/v1/carts/cart_fixture', options: { method: 'GET' }
+    });
+    expect(calls.find((call) => call.url.includes('/carts/cart_fixture')).options.headers.get('authorization'))
+      .toBe('private-value');
+  });
+
+  it('recovers after late injection by verifying the cart with a later type-ahead request', async () => {
+    window.history.replaceState({}, '', '/en/search?search-bar=milk&storeId=fixture-store&cartId=cart_fixture');
+    document.cookie = 'fulfillment_pickup_type=store; path=/';
+    const calls = [];
+    window.fetch = vi.fn(async (url, options = {}) => {
+      calls.push({ url: String(url), options });
+      return jsonResponse({ entries: {} });
+    });
+    window.eval(capabilitySource);
+
+    await window.fetch('https://api.pcexpress.ca/pcx-bff/api/v2/products/type-ahead?term=eggs', {
+      method: 'GET', headers: { authorization: 'private-value' }, credentials: 'include'
+    });
+
+    await vi.waitFor(() => expect(window[Symbol.for('rcss-price-per-unit.api-capture.v1')].cartCapabilityStatus)
+      .toBe('ready'));
+    expect(calls[1]).toMatchObject({
+      url: 'https://api.pcexpress.ca/pcx-bff/api/v2/carts/cart_fixture',
+      options: { method: 'GET', credentials: 'include' }
+    });
+    expect(calls[1].options.headers.get('authorization')).toBe('private-value');
+  });
+
+  it('bootstraps a late Safari install from the current page cart and pickup-store identity', async () => {
+    window.history.replaceState({}, '', '/en/search?search-bar=milk');
+    window.localStorage.setItem('lcl-cart-id-banner', 'cart_fixture');
+    document.cookie = 'last_selected_store=fixture-store; path=/';
+    document.cookie = 'fulfillment_pickup_type=store; path=/';
+    const calls = [];
+    window.fetch = vi.fn(async (url, options = {}) => {
+      calls.push({ url: String(url), options });
+      return jsonResponse({ cart: { orders: [] } });
+    });
+
+    window.eval(sessionCapabilitySource);
+
+    await vi.waitFor(() => expect(window[Symbol.for('rcss-price-per-unit.api-capture.v1')].cartCapabilityStatus)
+      .toBe('ready'));
+    expect(calls[0]).toMatchObject({
+      url: 'https://api.pcexpress.ca/pcx-bff/api/v1/carts/cart_fixture',
+      options: { method: 'GET', credentials: 'include' }
+    });
+    expect(calls[0].options.headers.get('basesiteid')).toBe('nofrills');
+    expect(calls[0].options.headers.has('x-apikey')).toBe(true);
+    expect(calls[0].options.headers.has('authorization')).toBe(false);
+  });
+
+  it('adds and reviews only through an observed pickup cart template, then verifies the exact entry', async () => {
+    window.history.replaceState({}, '', '/en/search?search-bar=milk&storeId=fixture-store&cartId=cart_fixture');
+    document.cookie = 'fulfillment_pickup_type=pickup; path=/';
+    const cartUrl = 'https://api.pcexpress.ca/pcx-bff/api/v2/carts/cart_fixture';
+    const payload = { cart: { orders: [{ entries: [{
+      quantity: 1,
+      offer: { id: 'milk_EA' }
+    }] }] } };
+    const calls = [];
+    window.fetch = vi.fn(async (url, options = {}) => {
+      calls.push({ url: String(url), options });
+      return jsonResponse(payload);
+    });
+    window.eval(capabilitySource);
+    await window.fetch(cartUrl, { method: 'GET', headers: { 'x-cart': 'yes' } });
+    await vi.waitFor(async () => expect(await window.__gppuLoblawCapability.readCart(['milk_EA']))
+      .toMatchObject({ inspectable: true, presentProductIds: ['milk_EA'] }));
+    await expect(window.__gppuLoblawCapability.addProduct('milk_EA')).resolves.toEqual({ status: 'added' });
+    expect(calls.at(-1)).toMatchObject({ url: cartUrl, options: { method: 'POST' } });
+    expect(calls.at(-1).options.headers.get('content-type')).toBe('application/json');
+    expect(JSON.parse(calls.at(-1).options.body)).toEqual({ entries: {
+      milk_EA: { quantity: 1, fulfillmentMethod: 'pickup', sellerId: 'fixture-store' }
+    } });
+  });
+
+  it('captures the authenticated No Frills cart template from XMLHttpRequest', async () => {
+    window.history.replaceState({}, '', '/en/search?search-bar=milk&storeId=fixture-store&cartId=cart_fixture');
+    const cartUrl = 'https://api.pcexpress.ca/pcx-bff/api/v1/carts/cart_fixture';
+    const payload = { entries: { milk_EA: {
+      quantity: 1, fulfillmentMethod: 'pickup', sellerId: 'fixture-store'
+    } } };
+    class FixtureXHR {
+      constructor() { this.listeners = {}; this.responseType = ''; this.withCredentials = true; }
+      open(method, url) { this.method = method; this.url = String(url); }
+      setRequestHeader(name, value) { this.headers ||= []; this.headers.push([name, value]); }
+      addEventListener(type, listener) { this.listeners[type] ||= []; this.listeners[type].push(listener); }
+      getResponseHeader(name) { return String(name).toLowerCase() === 'content-type' ? 'application/json' : null; }
+      send() {
+        this.status = 200;
+        this.responseURL = this.url;
+        this.responseText = JSON.stringify(payload);
+        queueMicrotask(() => this.listeners.load?.forEach((listener) => listener.call(this)));
+      }
+    }
+    window.XMLHttpRequest = FixtureXHR;
+    const calls = [];
+    window.fetch = vi.fn(async (url, options = {}) => {
+      calls.push({ url: String(url), options });
+      return jsonResponse(payload);
+    });
+    window.eval(capabilitySource);
+
+    const request = new window.XMLHttpRequest();
+    request.open('GET', cartUrl);
+    request.setRequestHeader('x-cart', 'observed');
+    request.send();
+
+    await vi.waitFor(async () => expect(await window.__gppuLoblawCapability.readCart(['milk_EA']))
+      .toMatchObject({ inspectable: true, presentProductIds: ['milk_EA'] }));
+    expect(calls.at(-1).options.credentials).toBe('include');
+    expect(calls.at(-1).options.headers.get('x-cart')).toBe('observed');
+    await expect(window.__gppuLoblawCapability.addProduct('milk_EA')).resolves.toEqual({ status: 'added' });
+  });
+
+  it('uses the authenticated customer-carts XHR to verify the current exact cart', async () => {
+    window.history.replaceState({}, '', '/en/search?search-bar=milk&storeId=fixture-store&cartId=cart_fixture');
+    const customerCartsUrl = 'https://api.pcexpress.ca/pcx-bff/api/v1/customers/customer_fixture/carts';
+    const cartPayload = { entries: { milk_EA: {
+      quantity: 1, fulfillmentMethod: 'pickup', sellerId: 'fixture-store'
+    } } };
+    class FixtureXHR {
+      constructor() { this.listeners = {}; this.responseType = ''; this.withCredentials = true; }
+      open(method, url) { this.method = method; this.url = String(url); }
+      setRequestHeader(name, value) { this.headers ||= []; this.headers.push([name, value]); }
+      addEventListener(type, listener) { this.listeners[type] ||= []; this.listeners[type].push(listener); }
+      getResponseHeader(name) { return String(name).toLowerCase() === 'content-type' ? 'application/json' : null; }
+      send() {
+        this.status = 200;
+        this.responseURL = this.url;
+        this.responseText = JSON.stringify({ carts: [{ id: 'cart_fixture' }] });
+        queueMicrotask(() => this.listeners.load?.forEach((listener) => listener.call(this)));
+      }
+    }
+    window.XMLHttpRequest = FixtureXHR;
+    const calls = [];
+    window.fetch = vi.fn(async (url, options = {}) => {
+      calls.push({ url: String(url), options });
+      return jsonResponse(cartPayload);
+    });
+    window.eval(capabilitySource);
+
+    const request = new window.XMLHttpRequest();
+    request.open('GET', customerCartsUrl);
+    request.setRequestHeader('authorization', 'private-value');
+    request.send();
+
+    await vi.waitFor(async () => expect(await window.__gppuLoblawCapability.readCart(['milk_EA']))
+      .toMatchObject({ inspectable: true, presentProductIds: ['milk_EA'] }));
+    expect(calls[0].url).toBe('https://api.pcexpress.ca/pcx-bff/api/v1/carts/cart_fixture');
+    expect(calls[0].options.headers.get('authorization')).toBe('private-value');
+  });
+
+  it('fails closed when a cart POST cannot prove the requested product is present', async () => {
+    window.history.replaceState({}, '', '/en/search?search-bar=milk&storeId=fixture-store&cartId=cart_fixture');
+    document.cookie = 'fulfillment_pickup_type=pickup; path=/';
+    const cartUrl = 'https://api.pcexpress.ca/pcx-bff/api/v2/carts/cart_fixture';
+    window.fetch = vi.fn(async () => jsonResponse({ entries: {
+      other_EA: { quantity: 1, fulfillmentMethod: 'pickup', sellerId: 'fixture-store' }
+    } }));
+    window.eval(capabilitySource);
+    await window.fetch(cartUrl, { method: 'GET' });
+    await vi.waitFor(() => expect(window.__gppuLoblawCapability.addProduct('milk_EA')).resolves.toBeNull());
+  });
+
+  it('rejects absent, unknown, and failed direct-query templates without mutating page state', async () => {
+    let fail = false;
+    window.fetch = vi.fn(async () => fail
+      ? new Response('{}', { status: 503, headers: { 'content-type': 'application/json' } })
+      : jsonResponse(payloadFor('milk_EA')));
+    window.eval(capabilitySource);
+    expect(await window.__gppuLoblawCapability.queryProducts('rice')).toBeNull();
+
+    const endpoint = 'https://api.pcexpress.ca/pcx-bff/api/v2/products/search';
+    await window.fetch(endpoint, { method: 'POST', body: JSON.stringify({ unrelated: 'milk' }) });
+    expect(await window.__gppuLoblawCapability.queryProducts('rice')).toBeNull();
+
+    await window.fetch(endpoint, { method: 'POST', body: searchRequest(null).body });
+    fail = true;
+    expect(await window.__gppuLoblawCapability.queryProducts('rice')).toBeNull();
+  });
+
   it('returns the retailer fetch promise unchanged', async () => {
     const nativePromise = Promise.resolve(new Response('{}', { status: 200 }));
     window.fetch = vi.fn(() => nativePromise);

@@ -2,7 +2,8 @@
  * Shared DOM workflow for retailer cart adapters.
  *
  * Retailer modules provide route shapes, stable card identity, and a lexical
- * trusted-model reader. This module provides the bounded first-page scroll,
+ * trusted-model reader. This module prefers a complete, current API snapshot
+ * before using the bounded first-page DOM fallback,
  * card-scoped semantic controls, virtualization revalidation, Add verification,
  * blocker pauses, and cart-review lifecycle. No DOM price is ever accepted.
  */
@@ -183,8 +184,25 @@ export function createRetailerCartAdapter(config) {
     searchUrl(query) {
       try { return config.searchUrl(query, new URL(location.href)); } catch { return null; }
     },
+    async queryProducts(query, options) {
+      if (typeof config.queryProducts !== 'function') return null;
+      try { return await config.queryProducts(query, options); } catch { return null; }
+    },
+    async directAddProduct(candidate, options) {
+      if (typeof config.addProduct !== 'function') return null;
+      try { return await config.addProduct(candidate, options); } catch { return null; }
+    },
     navigate(url) { location.assign(url); },
     async collectProducts({ onProgress } = {}) {
+      // A current snapshot is authoritative for planning and does not depend
+      // on lazy image/card rendering.  In particular, do not scroll merely to
+      // make a product visible: that was both slow and inconsistent on the
+      // retailers' virtualized grids.
+      const snapshot = config.trustedSnapshot?.();
+      if (snapshot?.accepted === true && Array.isArray(snapshot.products)) {
+        onProgress?.(`Using ${snapshot.products.length} verified API result${snapshot.products.length === 1 ? '' : 's'}`);
+        return { status: 'complete', products: snapshot.products, source: 'api-snapshot' };
+      }
       const products = new Map();
       let stableBottomPasses = 0;
       let previousHeight = -1;
@@ -220,6 +238,9 @@ export function createRetailerCartAdapter(config) {
       return { status: 'complete', products: [...products.values()] };
     },
     async addProduct(candidate, { onProgress } = {}) {
+      // A retailer capability is a private, verified API operation captured
+      // in the page world. Returning null means it is unavailable or could
+      // not prove success, so the established DOM path remains a fallback.
       const located = await findExactProductCard(candidate.productId, onProgress);
       if (located?.blocker) return { status: 'human-required', reason: located.blocker };
       if (!located) return { status: 'missed', reason: 'The exact previewed product was no longer in the loaded results.' };
@@ -266,6 +287,10 @@ export function createRetailerCartAdapter(config) {
     },
     cartUrl() {
       try { return config.cartUrl(new URL(location.href)); } catch { return null; }
+    },
+    async directReviewCart(candidates = []) {
+      if (typeof config.reviewCart !== 'function') return null;
+      try { return await config.reviewCart(candidates); } catch { return null; }
     },
     async reviewCart() {
       await wait(500);

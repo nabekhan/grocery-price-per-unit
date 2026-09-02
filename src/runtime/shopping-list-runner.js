@@ -14,8 +14,12 @@ import { sortModels } from '../sorting/sort.js';
  * explicitly preview a list and explicitly start its Add phase.
  */
 
-export const SHOPPING_RUN_STORAGE_KEY = 'shoppingListRunV1';
-const RUN_VERSION = 1;
+// V4 deliberately invalidates candidates saved by the earlier page-navigation
+// and price-only matching workflows. Those candidates could have come from a
+// stale SPA snapshot or a loosely related search result, so an upgraded run
+// must preview them again through the scoped API and shared relevance gate.
+export const SHOPPING_RUN_STORAGE_KEY = 'shoppingListRunV4';
+const RUN_VERSION = 4;
 const MAX_ITEMS = 40;
 const MAX_QUERY_LENGTH = 120;
 const MAX_REASON_LENGTH = 240;
@@ -49,12 +53,47 @@ function normalizedCandidate(value) {
   return { productId, name, currentPrice, normalizedUnitPrice, dimension };
 }
 
-export function chooseCheapestProduct(products, mode = 'unit') {
-  const candidates = (Array.isArray(products) ? products : [])
+function searchWords(value) {
+  return String(value || '').normalize('NFKC').toLowerCase().match(/[\p{L}\p{N}]+/gu) || [];
+}
+
+function singularWord(word) {
+  if (word.length > 4 && word.endsWith('ies')) return `${word.slice(0, -3)}y`;
+  if (word.length > 3 && word.endsWith('es')) return word.slice(0, -2);
+  if (word.length > 3 && word.endsWith('s')) return word.slice(0, -1);
+  return word;
+}
+
+function queryMatchTier(name, query) {
+  const queryTokens = searchWords(query);
+  const nameTokens = searchWords(name);
+  if (!queryTokens.length || !nameTokens.length) return 0;
+  if (` ${nameTokens.join(' ')} `.includes(` ${queryTokens.join(' ')} `)) return 3;
+  const exact = new Set(nameTokens);
+  if (queryTokens.every((token) => exact.has(token))) return 2;
+  const singular = new Set(nameTokens.map(singularWord));
+  return queryTokens.every((token) => singular.has(singularWord(token))) ? 1 : 0;
+}
+
+export function chooseCheapestProduct(products, mode = 'unit', query = '') {
+  const eligible = (Array.isArray(products) ? products : [])
     .filter((product) => product?.matched === true && product?.addable === true)
-    .map(normalizedCandidate)
-    .filter(Boolean);
-  if (!candidates.length) return null;
+    .map((product, index) => ({
+      candidate: normalizedCandidate(product), index,
+      matchTier: queryMatchTier(product?.name, query)
+    }))
+    .filter(({ candidate }) => Boolean(candidate));
+  if (!eligible.length) return null;
+  const bestTier = Math.max(...eligible.map(({ matchTier }) => matchTier));
+  // First compare products that match the shopper's words equally well. If a
+  // retailer returns conceptual/category matches only (for example “baguette”
+  // for “bread”), retain a bounded relevance-ordered window rather than
+  // treating every loosely related search hit as the requested item.
+  const candidates = (bestTier > 0
+    ? eligible.filter(({ matchTier }) => matchTier === bestTier)
+    : eligible.slice(0, 12))
+    .sort((left, right) => left.index - right.index)
+    .map(({ candidate }) => candidate);
   const sorted = sortModels(candidates, {
     dimension: mode === 'total' ? 'total' : 'auto',
     direction: 'asc'
@@ -104,7 +143,12 @@ function normalizedRun(value, retailerId) {
       ? Math.max(0, Math.min(value.currentIndex, items.length))
       : 0,
     items,
-    message: boundedText(value.message, MAX_REASON_LENGTH),
+    // Completed successful runs need no announcement; the item rows already
+    // show the result. This also removes completion prose saved by older builds.
+    message: value.phase === 'complete'
+      && items.every((item) => !['missed', 'missing-from-cart'].includes(item.status))
+      ? null
+      : boundedText(value.message, MAX_REASON_LENGTH),
     createdAt: Number.isFinite(value.createdAt) ? value.createdAt : Date.now(),
     updatedAt: Number.isFinite(value.updatedAt) ? value.updatedAt : Date.now()
   };
@@ -132,18 +176,16 @@ const shoppingStyleText = `
     #lups-control #gppu-shopping-toggle[data-gppu-quick-action="true"]{position:absolute!important;z-index:2!important;right:calc(100% + 8px)!important;bottom:0!important;margin:0!important;opacity:0!important;visibility:hidden!important;pointer-events:none!important;transform:translateX(10px) scale(.92)!important;transition:opacity .12s ease,transform .12s ease,visibility .12s ease,box-shadow .16s ease,background .16s ease!important}
     #lups-control .lups-trigger-row:has(>#lups-flip-direction:not([hidden]))>#gppu-shopping-toggle[data-gppu-quick-action="true"]{right:calc(100% + 66px)!important}
     #lups-control[data-lups-menu-open="false"] .lups-trigger-row:hover>#gppu-shopping-toggle[data-gppu-quick-action="true"],#lups-control[data-lups-menu-open="false"] .lups-trigger-row:focus-within>#gppu-shopping-toggle[data-gppu-quick-action="true"]{opacity:1!important;visibility:visible!important;pointer-events:auto!important;transform:none!important}
-    #gppu-shopping-panel{box-sizing:border-box!important;width:min(390px,calc(100vw - 24px))!important;max-height:min(72vh,620px)!important;margin-bottom:10px!important;padding:16px!important;overflow:auto!important;border:1px solid #d7dee8!important;border-radius:18px!important;background:#fffffff8!important;box-shadow:0 18px 50px #0f172a35!important;backdrop-filter:blur(12px)!important}
+    #gppu-shopping-panel{box-sizing:border-box!important;position:relative!important;width:min(390px,calc(100vw - 24px))!important;max-height:min(72vh,620px)!important;margin-bottom:10px!important;padding:16px!important;overflow:auto!important;border:1px solid #d7dee8!important;border-radius:18px!important;background:#fffffff8!important;box-shadow:0 18px 50px #0f172a35!important;backdrop-filter:blur(12px)!important}
     #gppu-shopping-panel[hidden]{display:none!important}
-    .gppu-shopping-heading{display:flex!important;align-items:center!important;justify-content:space-between!important;gap:12px!important}
-    #gppu-shopping-panel h2{margin:0!important;font-size:18px!important;letter-spacing:-.02em!important}
-    #gppu-shopping-close{display:grid!important;width:36px!important;height:36px!important;padding:0!important;place-items:center!important;border:1px solid #d7dee8!important;border-radius:999px!important;background:#fff!important;color:#526071!important;font:500 22px/1 sans-serif!important}
-    #gppu-shopping-panel label{display:block!important;margin:10px 0 5px!important;font-weight:700!important}
+    #gppu-shopping-panel label{display:block!important;margin:0 0 5px!important;font-weight:700!important}
     #gppu-shopping-input{box-sizing:border-box!important;width:100%!important;border:1px solid #cbd5e1!important;border-radius:10px!important;background:#fff!important;color:#1f2937!important;font:inherit!important}
     #gppu-shopping-input{min-height:78px!important;padding:9px 10px!important;resize:vertical!important}
     .gppu-shopping-actions{display:flex!important;flex-wrap:wrap!important;gap:8px!important;margin-top:12px!important}
     .gppu-shopping-actions button{min-height:42px!important;padding:0 13px!important;border:1px solid #27364a!important;border-radius:999px!important;background:#27364a!important;color:#fff!important;font:700 13px/1 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif!important}
     .gppu-shopping-actions button[data-secondary="true"]{border-color:#cbd5e1!important;background:#fff!important;color:#334155!important}
     #gppu-shopping-status{margin:12px 0 8px!important;padding:9px 10px!important;border-radius:10px!important;background:#eef2f7!important;color:#364152!important;font-weight:650!important}
+    #gppu-shopping-status[hidden]{display:none!important}
     #gppu-shopping-results{display:grid!important;gap:7px!important;margin:0!important;padding:0!important;list-style:none!important}
     #gppu-shopping-results li{padding:8px 9px!important;border:1px solid #e2e8f0!important;border-radius:10px!important;background:#fff!important}
     #gppu-shopping-results strong{display:block!important;color:#263244!important}
@@ -205,6 +247,7 @@ export function createShoppingListRunner({ retailerId, adapter }) {
   function setPanelOpen(open, { focus = false } = {}) {
     panel.hidden = !open;
     toggle?.setAttribute('aria-expanded', String(open));
+    toggle?.setAttribute('aria-label', open ? 'Close cart builder' : 'Open cart builder');
     if (open && focus) window.setTimeout(() => input?.focus(), 0);
   }
 
@@ -276,33 +319,38 @@ export function createShoppingListRunner({ retailerId, adapter }) {
     actions.textContent = '';
     results.textContent = '';
     if (!run) {
-      status.textContent = 'Paste a comma-separated shopping list.';
+      status.hidden = true;
+      status.textContent = '';
       actionButton('Preview items', startPlanning);
       return;
     }
     input.value = run.items.map((item) => item.query).join(', ');
     input.disabled = true;
-    status.textContent = run.message || ({
+    const statusMessage = run.message || ({
       planning: `Planning item ${Math.min(run.currentIndex + 1, run.items.length)} of ${run.items.length}`,
-      'ready-to-add': 'Preview complete. Review the choices before changing your cart.',
+      'ready-to-add': '',
       adding: `Adding item ${Math.min(run.currentIndex + 1, run.items.length)} of ${run.items.length}`,
-      reviewing: 'Reviewing the planned products in your cart',
+      reviewing: 'Reviewing the added products in your cart',
       paused: 'Paused for your attention',
-      complete: 'Cart run complete'
+      complete: ''
     }[run.phase]);
+    status.textContent = statusMessage;
+    status.hidden = !statusMessage;
     for (const item of run.items) {
       const row = document.createElement('li');
       const title = document.createElement('strong');
-      title.textContent = `${item.query} — ${item.status.replaceAll('-', ' ')}`;
+      title.textContent = item.status === 'planned'
+        ? item.query
+        : `${item.query} — ${item.status.replaceAll('-', ' ')}`;
       const detail = document.createElement('small');
       detail.textContent = describeItem(item);
       row.append(title, detail);
       results.append(row);
     }
-    if (run.phase === 'ready-to-add') actionButton('Add planned items', startAdding);
+    if (run.phase === 'ready-to-add') actionButton('Add', startAdding);
     if (run.phase === 'paused') actionButton('I resolved it — continue', continueRun);
     if (run.phase === 'complete') actionButton('Start another list', resetRun);
-    actionButton('Cancel run', cancelRun, true);
+    actionButton('Cancel', cancelRun, true);
   }
 
   async function pause(reason, resumePhase) {
@@ -343,7 +391,7 @@ export function createShoppingListRunner({ retailerId, adapter }) {
   async function startAdding() {
     run.phase = 'adding';
     run.currentIndex = 0;
-    run.message = 'Starting the explicitly approved Add phase';
+    run.message = 'Adding items';
     await saveRun();
     render();
     void advance();
@@ -375,13 +423,38 @@ export function createShoppingListRunner({ retailerId, adapter }) {
     const item = run.items[run.currentIndex];
     if (!item) {
       run.phase = 'ready-to-add';
-      run.message = 'Preview complete. No cart changes have been made.';
+      run.message = null;
       await saveRun();
       render();
       return;
     }
     const blocked = adapter.blockingReason?.();
     if (blocked) return pause(blocked, 'planning');
+    // Retailers may expose a documented/public product search endpoint. A
+    // read-only query previews each list item without navigating a storefront
+    // page (and therefore without loading its product-grid media). Failure is
+    // deliberately non-fatal: the established current-page capture path stays
+    // available as a conservative fallback.
+    if (typeof adapter.queryProducts === 'function') {
+      item.status = 'collecting';
+      run.message = `Finding verified results for “${item.query}”`;
+      await saveRun();
+      render();
+      const queried = await adapter.queryProducts(item.query, {
+        onProgress: (message) => { run.message = boundedText(message, MAX_REASON_LENGTH); render(); }
+      });
+      if (queried?.status === 'complete') {
+        const chosen = chooseCheapestProduct(queried.products, run.mode, item.query);
+        if (chosen) {
+          item.status = 'planned'; item.candidate = normalizedCandidate(chosen);
+          item.selectedBy = chosen.selectedBy; item.reason = null;
+        } else { item.status = 'missed'; item.reason = 'No in-stock, verified product was returned.'; }
+        run.currentIndex += 1;
+        run.message = null;
+        await saveRun(); render();
+        return advancePlanning();
+      }
+    }
     if (!adapter.isSearchFor(item.query)) {
       item.status = 'pending';
       run.message = `Opening ${adapter.retailerName || 'the retailer'} search for “${item.query}”`;
@@ -413,7 +486,7 @@ export function createShoppingListRunner({ retailerId, adapter }) {
       item.status = 'pending';
       return pause(collection.reason || 'Could not confirm that every first-page result was loaded.', 'planning');
     }
-    const chosen = chooseCheapestProduct(collection?.products ?? collection, run.mode);
+    const chosen = chooseCheapestProduct(collection?.products ?? collection, run.mode, item.query);
     if (chosen) {
       item.status = 'planned';
       item.candidate = normalizedCandidate(chosen);
@@ -447,6 +520,32 @@ export function createShoppingListRunner({ retailerId, adapter }) {
     }
     const blocked = adapter.blockingReason?.();
     if (blocked) return pause(blocked, 'adding');
+    // Prefer a retailer's private verified API capability. This keeps a fully
+    // capable run on the current document: no product-grid navigation, lazy
+    // images, or scrolling are necessary for the approved Add phase.
+    item.status = 'adding';
+    run.message = `Adding ${item.candidate.name}`;
+    await saveRun();
+    render();
+    const direct = await adapter.directAddProduct?.(item.candidate, {
+      onProgress: (message) => { run.message = boundedText(message, MAX_REASON_LENGTH); render(); }
+    });
+    if (direct?.status === 'human-required') {
+      item.status = 'planned';
+      return pause(direct.reason, 'adding');
+    }
+    if (direct?.status === 'added') {
+      item.status = 'added';
+      item.priceChanged = direct.priceChanged === true;
+      item.reason = direct.alreadyPresent === true
+        ? 'This exact product was already represented in the cart, so it was not added twice.'
+        : item.priceChanged ? 'Price changed after preview; the current product was added.' : null;
+      run.currentIndex += 1;
+      run.message = null;
+      await saveRun();
+      render();
+      return advanceAdding();
+    }
     if (!adapter.isSearchFor(item.query)) {
       item.status = 'planned';
       run.message = `Returning to “${item.query}” to add the exact previewed product`;
@@ -460,10 +559,6 @@ export function createShoppingListRunner({ retailerId, adapter }) {
       adapter.navigate(target);
       return;
     }
-    item.status = 'adding';
-    run.message = `Adding ${item.candidate.name}`;
-    await saveRun();
-    render();
     const result = await adapter.addProduct(item.candidate, {
       onProgress: (message) => { run.message = boundedText(message, MAX_REASON_LENGTH); render(); }
     });
@@ -489,6 +584,11 @@ export function createShoppingListRunner({ retailerId, adapter }) {
   }
 
   async function advanceReview() {
+    const added = run.items.filter((item) => item.status === 'added' && item.candidate);
+    // Direct review uses the same captured cart context as direct Add and is
+    // intentionally attempted before a cart-page navigation.
+    const directReview = await adapter.directReviewCart?.(added.map((item) => item.candidate));
+    if (directReview) return finishReview(directReview, added);
     if (!adapter.isCartPage()) {
       const target = adapter.cartUrl();
       if (!target) return pause(
@@ -499,8 +599,11 @@ export function createShoppingListRunner({ retailerId, adapter }) {
       adapter.navigate(target);
       return;
     }
-    const added = run.items.filter((item) => item.status === 'added' && item.candidate);
     const review = await adapter.reviewCart(added.map((item) => item.candidate));
+    return finishReview(review, added);
+  }
+
+  async function finishReview(review, added) {
     if (review?.blockingReason) return pause(review.blockingReason, 'reviewing');
     if (review?.inspectable) {
       const present = new Set(review.presentProductIds || []);
@@ -520,8 +623,8 @@ export function createShoppingListRunner({ retailerId, adapter }) {
     run.currentIndex = run.items.length;
     const missed = run.items.filter((item) => ['missed', 'missing-from-cart'].includes(item.status)).length;
     run.message = missed
-      ? `Finished with ${missed} item${missed === 1 ? '' : 's'} requiring attention. Nothing was checked out.`
-      : 'All planned Add actions completed. Nothing was checked out.';
+      ? `${missed} item${missed === 1 ? '' : 's'} need attention.`
+      : null;
     await saveRun();
     render();
   }
@@ -548,18 +651,8 @@ export function createShoppingListRunner({ retailerId, adapter }) {
     root.setAttribute('aria-label', 'Shopping list cart assistant');
     panel = document.createElement('section');
     panel.id = 'gppu-shopping-panel';
+    panel.setAttribute('aria-label', 'Shopping list');
     panel.hidden = true;
-    const heading = document.createElement('h2');
-    heading.textContent = 'Cart builder';
-    const panelHeader = document.createElement('div');
-    panelHeader.className = 'gppu-shopping-heading';
-    const close = document.createElement('button');
-    close.id = 'gppu-shopping-close';
-    close.type = 'button';
-    close.textContent = '×';
-    close.setAttribute('aria-label', 'Close cart builder');
-    close.addEventListener('click', () => setPanelOpen(false));
-    panelHeader.append(heading, close);
     const inputLabel = document.createElement('label');
     inputLabel.htmlFor = 'gppu-shopping-input';
     inputLabel.textContent = 'Shopping list';
@@ -573,7 +666,7 @@ export function createShoppingListRunner({ retailerId, adapter }) {
     results.id = 'gppu-shopping-results';
     actions = document.createElement('div');
     actions.className = 'gppu-shopping-actions';
-    panel.append(panelHeader, inputLabel, input, status, results, actions);
+    panel.append(inputLabel, input, status, results, actions);
     toggle = document.createElement('button');
     toggle.id = 'gppu-shopping-toggle';
     toggle.type = 'button';

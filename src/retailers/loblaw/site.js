@@ -63,13 +63,14 @@ function productId(card, index) {
   return href.match(/(?:product|p)\/([^/?#]+)/)?.[1] || card.getAttribute('data-product-id') || `loaded-${index}`;
 }
 
-export function extractCard(card, index = 0, apiProducts = null) {
-  const cardProductId = productId(card, index);
-  const api = apiProducts?.get(cardProductId) || null;
-  const apiPackageText = api?.packageSizing || '';
+// This is intentionally DOM-free so Cart Builder can rank the complete
+// sanitized API/bootstrap snapshot without asking the grid to render cards.
+export function modelForApiProduct(api) {
+  if (!api?.id || !api?.name) return null;
+  const apiPackageText = api.packageSizing || '';
   const hasExplicitUnitPrice = /\$\s*\d.*(?:\/|\bper\b)/i.test(apiPackageText);
-  const input = api ? {
-    productId: cardProductId,
+  return parseProduct({
+    productId: api.id,
     name: api.name,
     currentPrice: api.weighted && !hasExplicitUnitPrice ? null : api.currentPrice,
     regularPrice: api.regularPrice,
@@ -77,7 +78,13 @@ export function extractCard(card, index = 0, apiProducts = null) {
     rawUnitPriceText: apiPackageText.includes(',') ? apiPackageText.slice(apiPackageText.indexOf(',') + 1) : apiPackageText,
     promotionText: '',
     currentPriceCertain: true
-  } : {
+  });
+}
+
+export function extractCard(card, index = 0, apiProducts = null) {
+  const cardProductId = productId(card, index);
+  const api = apiProducts?.get(cardProductId) || null;
+  const input = api ? modelForApiProduct(api) : {
     productId: cardProductId,
     name: '',
     currentPrice: null,
@@ -88,7 +95,7 @@ export function extractCard(card, index = 0, apiProducts = null) {
     currentPriceCertain: false
   };
   return {
-    ...parseProduct(input),
+    ...(api ? input : parseProduct(input)),
     dataSource: api ? 'api' : 'missing-api',
     card
   };
