@@ -14,8 +14,8 @@ Install **Userscripts** for Safari, enable the extension, and give it access to
 the four supported storefronts. Then run:
 
 ```sh
-nix shell nixpkgs#nodejs_22 --command npm ci
-nix shell nixpkgs#nodejs_22 --command npm run userscript:install -- \
+npm ci
+npm run userscript:install -- \
   "/absolute/path/from/Userscripts/Grocery Price Per Unit.user.js"
 ```
 
@@ -46,16 +46,11 @@ visible.
 ## Develop
 
 ```sh
-nix shell nixpkgs#nodejs_22 --command npm run build
-nix shell nixpkgs#nodejs_22 --command npm run check
-nix shell nixpkgs#nodejs_22 --command npm run visual:audit
-nix shell nixpkgs#nodejs_22 --command npm run userscript:candidate:verify
+npm run build
+npm run check
+npm run visual:audit
+npm run userscript:candidate:verify
 ```
-
-The sole generated release artifact is
-`dist/userscript/Grocery Price Per Unit.user.js`. It is unminified and includes
-preserved architecture, trust-boundary, lifecycle, retailer, sorting, and UI
-comments. Edit `src/`, then rebuild; do not hand-edit the generated file.
 
 The visual audit writes a browsable responsive screenshot report to
 `artifacts/screenshots/visual-audit-report.html`.
