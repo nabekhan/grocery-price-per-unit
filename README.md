@@ -8,7 +8,7 @@ The script passively observes product data each storefront already loads. It
 makes no catalogue requests, has no remote dependencies or analytics, and does
 not interact with consent dialogs or CAPTCHAs.
 
-## Install with Nix
+## Install
 
 Install **Userscripts** for Safari, enable the extension, and give it access to
 the four supported storefronts. Then run:
