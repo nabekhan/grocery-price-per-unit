@@ -337,7 +337,7 @@ export function expectControlStateMatrix(evidence) {
 
   const pendingStates = evidence.filter((item) => item.state === 'pending-automatic-ascending');
   expect(pendingStates).toHaveLength(CONTROL_VIEWPORTS.length);
-  expect(pendingStates.every((item) => item.dataState === 'pending'
+  const invalidPendingStates = pendingStates.filter((item) => !(item.dataState === 'pending'
     && item.restored === 'false' && item.mode === 'auto-asc'
     && item.buttonText === 'Auto · $/kg · Low → high'
     && item.statusText === 'Waiting for current-page product data · Website order preserved · 8 loaded products · 1 sponsored/ad tile hidden'
@@ -345,7 +345,8 @@ export function expectControlStateMatrix(evidence) {
     && item.annotationCount === 0 && item.inlineOrderCount === 0
     && item.geometry.reverse?.height >= 44 && item.geometry.status !== null
     && item.geometry.status.x >= 0
-    && item.geometry.status.x + item.geometry.status.width <= item.viewport.width + 1)).toBe(true);
+    && item.geometry.status.x + item.geometry.status.width <= item.viewport.width + 1));
+  expect(invalidPendingStates, JSON.stringify(invalidPendingStates, null, 2)).toEqual([]);
   expect(pendingStates.filter((item) => item.viewport.width <= 390)
     .every((item) => item.geometry.status.height <= 110)).toBe(true);
 
