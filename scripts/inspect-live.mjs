@@ -23,7 +23,7 @@ if (target.protocol !== 'https:' || !allowedHosts.has(target.hostname)) {
 const label = process.argv[3] || 'inspection';
 if (!/^[a-z0-9-]{1,80}$/.test(label)) throw new Error('Screenshot label must use 1–80 lowercase letters, digits, or hyphens');
 
-const userscript = await fs.readFile('dist/userscript/Grocery Price Per Unit.user.js', 'utf8');
+const userscript = await fs.readFile('dist/Grocery-Price-Per-Unit.user.js', 'utf8');
 const browser = await webkit.launch({ headless: true });
 try {
   const page = await browser.newPage({ viewport: { width: 1440, height: 1000 }, locale: 'en-CA' });

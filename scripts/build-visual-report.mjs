@@ -132,7 +132,7 @@ await fs.writeFile(reportTemporary, html);
 await fs.writeFile(manifestTemporary, `${JSON.stringify({
   version: 6,
   generatedAt: new Date().toISOString(),
-  artifact: 'dist/userscript/Grocery Price Per Unit.user.js',
+  artifact: 'dist/Grocery-Price-Per-Unit.user.js',
   semanticFields,
   stateSummary: {
     total: matrix.states.length,

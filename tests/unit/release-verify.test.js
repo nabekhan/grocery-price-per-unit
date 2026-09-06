@@ -18,7 +18,7 @@ async function makeFixture({ version = '3.4.5', recorded = true } = {}) {
   await Promise.all([
     write(root, 'package.json', JSON.stringify({ version })),
     write(root, 'package-lock.json', JSON.stringify({ version, packages: { '': { version } } })),
-    write(root, 'dist/userscript/Grocery Price Per Unit.user.js', userscript),
+    write(root, 'dist/Grocery-Price-Per-Unit.user.js', userscript),
     write(root, 'release-history.json', JSON.stringify({
       releases: recorded ? { [version]: { userscriptSha256 } } : {
         '3.4.4': { userscriptSha256: 'a'.repeat(64) }
@@ -75,7 +75,7 @@ describe('userscript release identity', () => {
 
   it('rejects changed bytes under an already-recorded version', async () => {
     const fixture = await makeFixture();
-    await write(fixture.root, 'dist/userscript/Grocery Price Per Unit.user.js', `${fixture.userscript}\nchanged\n`);
+    await write(fixture.root, 'dist/Grocery-Price-Per-Unit.user.js', `${fixture.userscript}\nchanged\n`);
     await expectReleaseError(verifyRelease(fixture.root), ['already recorded with SHA-256']);
   });
 
@@ -84,7 +84,7 @@ describe('userscript release identity', () => {
     await write(fixture.root, 'package-lock.json', JSON.stringify({
       version: '3.4.4', packages: { '': { version: '3.4.3' } }
     }));
-    await write(fixture.root, 'dist/userscript/Grocery Price Per Unit.user.js', '// @version 3.4.2\n');
+    await write(fixture.root, 'dist/Grocery-Price-Per-Unit.user.js', '// @version 3.4.2\n');
     await expectReleaseError(verifyRelease(fixture.root), [
       'package-lock.json: expected version 3.4.5',
       'packages[""]: expected version 3.4.5',

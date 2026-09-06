@@ -7,7 +7,7 @@ const root = process.cwd();
 const fixture = await fs.readFile(path.join(root, 'tests/fixtures/product-grid.html'), 'utf8');
 const visualFixture = await fs.readFile(path.join(root, 'tests/fixtures/visual-marketplace-shell.html'), 'utf8');
 const userscript = await fs.readFile(
-  path.join(root, 'dist/userscript/Grocery Price Per Unit.user.js'),
+  path.join(root, 'dist/Grocery-Price-Per-Unit.user.js'),
   'utf8'
 );
 const products = [
@@ -1592,6 +1592,6 @@ test('userscript metadata keeps capture and UI in the page world', async () => {
   expect(userscript).toContain('// @grant       none');
   expect(userscript).not.toContain('// @inject-into content');
   expect(userscript).not.toMatch(/\/\/ @grant\s+GM\./);
-  expect(userscript).toContain('// @downloadURL https://github.com/nabekhan/grocery-price-per-unit/releases/latest/download/Grocery-Price-Per-Unit.user.js');
-  expect(userscript).toContain('// @updateURL   https://github.com/nabekhan/grocery-price-per-unit/releases/latest/download/Grocery-Price-Per-Unit.user.js');
+  expect(userscript).toContain('// @downloadURL https://raw.githubusercontent.com/nabekhan/grocery-price-per-unit/main/dist/Grocery-Price-Per-Unit.user.js');
+  expect(userscript).toContain('// @updateURL   https://raw.githubusercontent.com/nabekhan/grocery-price-per-unit/main/dist/Grocery-Price-Per-Unit.user.js');
 });

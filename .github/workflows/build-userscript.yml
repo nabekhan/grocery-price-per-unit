@@ -1,0 +1,40 @@
+name: Build userscript
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches: [main]
+    paths-ignore: [dist/**]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: userscript-build-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps webkit
+      - name: Build and verify
+        run: |
+          npm run check
+          npm run userscript:verify
+      - if: github.event_name == 'push'
+        run: |
+          git add dist/Grocery-Price-Per-Unit.user.js
+          git diff --cached --quiet || {
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git commit -m 'chore: build userscript [skip ci]'
+            git push
+          }

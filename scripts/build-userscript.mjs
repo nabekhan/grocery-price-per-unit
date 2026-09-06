@@ -49,8 +49,8 @@ const metadata = `// ==UserScript==
 // @name        ${pkg.userscript.name}
 // @version     ${pkg.version}
 // @description ${pkg.userscript.description}
-// @downloadURL https://github.com/nabekhan/grocery-price-per-unit/releases/latest/download/Grocery-Price-Per-Unit.user.js
-// @updateURL   https://github.com/nabekhan/grocery-price-per-unit/releases/latest/download/Grocery-Price-Per-Unit.user.js
+// @downloadURL https://raw.githubusercontent.com/nabekhan/grocery-price-per-unit/main/dist/Grocery-Price-Per-Unit.user.js
+// @updateURL   https://raw.githubusercontent.com/nabekhan/grocery-price-per-unit/main/dist/Grocery-Price-Per-Unit.user.js
 // @match       https://www.realcanadiansuperstore.ca/*
 // @match       https://www.nofrills.ca/*
 // @match       https://www.walmart.ca/*
@@ -228,5 +228,5 @@ ${storageShim}
 
 // A userscript-only build cannot leave a stale extension tree looking current.
 await fs.rm('dist', { recursive: true, force: true });
-await fs.mkdir('dist/userscript', { recursive: true });
-await fs.writeFile('dist/userscript/Grocery Price Per Unit.user.js', output);
+await fs.mkdir('dist', { recursive: true });
+await fs.writeFile('dist/Grocery-Price-Per-Unit.user.js', output);

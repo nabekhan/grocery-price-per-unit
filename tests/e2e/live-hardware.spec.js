@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 import fs from 'node:fs/promises';
 
-const userscript = await fs.readFile('dist/userscript/Grocery Price Per Unit.user.js', 'utf8');
+const userscript = await fs.readFile('dist/Grocery-Price-Per-Unit.user.js', 'utf8');
 const queries = [
   'hammer', 'screwdriver', 'extension cord', 'light bulbs', 'storage bin',
   'frying pan', 'kitchen utensils', 'snow shovel', 'door mat', 'batteries',

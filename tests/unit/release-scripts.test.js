@@ -22,12 +22,12 @@ async function userscriptInstallerFixture({
   await Promise.all([
     fs.mkdir(scripts, { recursive: true }),
     fs.mkdir(binaryDirectory, { recursive: true }),
-    fs.mkdir(path.join(root, 'dist/userscript'), { recursive: true }),
+    fs.mkdir(path.join(root, 'dist'), { recursive: true }),
     fs.mkdir(destinationDirectory, { recursive: true })
   ]);
   await fs.copyFile('scripts/install-userscript.sh', path.join(scripts, 'install-userscript.sh'));
   await fs.chmod(path.join(scripts, 'install-userscript.sh'), 0o755);
-  await fs.writeFile(path.join(root, 'dist/userscript/Grocery Price Per Unit.user.js'), 'new verified userscript\n');
+  await fs.writeFile(path.join(root, 'dist/Grocery-Price-Per-Unit.user.js'), 'new verified userscript\n');
   if (existing) await fs.writeFile(destination, 'previous userscript\n');
   await fs.writeFile(path.join(binaryDirectory, 'npm'), '#!/bin/sh\nexit 0\n');
   await fs.writeFile(path.join(binaryDirectory, 'node'), [

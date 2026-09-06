@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test';
 import fs from 'node:fs/promises';
 
 const enabled = process.env.LIVE_SITE === '1';
-const userscript = await fs.readFile('dist/userscript/Grocery Price Per Unit.user.js', 'utf8');
+const userscript = await fs.readFile('dist/Grocery-Price-Per-Unit.user.js', 'utf8');
 const relevantPageErrors = (errors) => errors.filter((message) =>
   !/analytics-fe\.digital-cloud\.medallia\.ca\/api\/web\/events.*access control checks/i.test(message));
 const installUserscript = (page) => page.addInitScript({ content: userscript });

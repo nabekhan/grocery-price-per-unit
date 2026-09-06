@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 import fs from 'node:fs/promises';
 
-const userscript = await fs.readFile('dist/userscript/Grocery Price Per Unit.user.js', 'utf8');
+const userscript = await fs.readFile('dist/Grocery-Price-Per-Unit.user.js', 'utf8');
 const cases = [
   ['rss', 'https://www.realcanadiansuperstore.ca', 'all purpose flour'],
   ['rss', 'https://www.realcanadiansuperstore.ca', 'sugar'],

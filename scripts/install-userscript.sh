@@ -2,7 +2,7 @@
 set -eu
 
 repo_dir=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd -P)
-source_userscript="$repo_dir/dist/userscript/Grocery Price Per Unit.user.js"
+source_userscript="$repo_dir/dist/Grocery-Price-Per-Unit.user.js"
 
 if [ "$#" -ne 1 ]; then
   echo "Usage: $0 /absolute/path/from/Userscripts/Grocery\ Price\ Per\ Unit.user.js" >&2

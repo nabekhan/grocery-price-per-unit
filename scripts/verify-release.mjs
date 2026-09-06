@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 const ARTIFACTS = {
   package: 'package.json',
   packageLock: 'package-lock.json',
-  userscript: 'dist/userscript/Grocery Price Per Unit.user.js',
+  userscript: 'dist/Grocery-Price-Per-Unit.user.js',
   history: 'release-history.json'
 };
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;

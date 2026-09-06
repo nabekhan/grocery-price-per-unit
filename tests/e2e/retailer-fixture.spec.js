@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 const root = process.cwd();
-const userscript = await fs.readFile(path.join(root, 'dist/userscript/Grocery Price Per Unit.user.js'), 'utf8');
+const userscript = await fs.readFile(path.join(root, 'dist/Grocery-Price-Per-Unit.user.js'), 'utf8');
 
 async function mockStorage(page) {
   await page.addInitScript(() => {

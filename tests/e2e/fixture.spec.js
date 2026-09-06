@@ -7,7 +7,7 @@ const root = process.cwd();
 const fixture = path.join(root, 'tests/fixtures/product-grid.html');
 const fixtureHtml = await fs.readFile(fixture, 'utf8');
 const visualFixtureHtml = await fs.readFile(path.join(root, 'tests/fixtures/visual-marketplace-shell.html'), 'utf8');
-const userscript = await fs.readFile(path.join(root, 'dist/userscript/Grocery Price Per Unit.user.js'), 'utf8');
+const userscript = await fs.readFile(path.join(root, 'dist/Grocery-Price-Per-Unit.user.js'), 'utf8');
 const tile = (productId, title, packageSizing, price, extra = {}) => ({
   productId, title, packageSizing, pricing: { price: price == null ? null : String(price), displayPrice: price == null ? null : `$${Number(price).toFixed(2)}` }, link: `/product/${productId}`, ...extra
 });

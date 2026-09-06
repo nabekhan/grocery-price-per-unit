@@ -13,7 +13,7 @@ describe('optional live-test harness', () => {
     const artifacts = [...source.matchAll(/fs\.readFile\('([^']+)'/g)].map((match) => match[1]);
     expect(artifacts.length).toBeGreaterThan(0);
     for (const artifact of artifacts) {
-      expect(artifact).toBe('dist/userscript/Grocery Price Per Unit.user.js');
+      expect(artifact).toBe('dist/Grocery-Price-Per-Unit.user.js');
       expect(fs.existsSync(artifact), `Missing live-test artifact: ${artifact}`).toBe(true);
     }
     expect(source).toContain('addInitScript');
